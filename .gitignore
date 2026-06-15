@@ -1,0 +1,21 @@
+# Dépendances
+node_modules/
+
+# Secrets & config locale (NE JAMAIS versionner)
+.env
+.env.local
+
+# Bases de données & logs (données locales, jamais versionnées)
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# Sauvegarde de l'historique git des anciens repos (local)
+.archive/
+
+# Build / cache
+dist/
+
+# macOS
+.DS_Store
