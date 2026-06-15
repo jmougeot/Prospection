@@ -1,0 +1,171 @@
+/**
+ * Routes de la prospection : recherche de personnes par poste (LinkedIn),
+ * suivi du job, tableau des prospects, emails optionnels et exports.
+ */
+import type express from "express";
+import { db } from "../../db.js";
+import { EFFECTIF_LABELS, hasCompanyFilters, SECTION_LABELS, type CompanyFilters } from "./company.js";
+import { currentSearchId, jobStatus, startEmailJob, startProspecting, stopProspecting } from "./enrich.js";
+import { hasSearchApi } from "./search.js";
+
+/** « a, b ; c » → ["a","b","c"] (séparateurs virgule/point-virgule). */
+function splitList(v: unknown): string[] {
+  return typeof v === "string" ? v.split(/[,;]+/).map((s) => s.trim()).filter(Boolean) : [];
+}
+
+/** Liste de boîtes saisie dans un textarea : une par ligne (ou « ; »). */
+function splitLines(v: unknown): string[] {
+  return typeof v === "string" ? v.split(/[\n;]+/).map((s) => s.trim()).filter(Boolean) : [];
+}
+
+export function registerB2bRoutes(app: express.Express): void {
+  app.get("/api/b2b/meta", (_req, res) =>
+    res.json({ search_api: hasSearchApi(), effectifs: EFFECTIF_LABELS, sections: SECTION_LABELS })
+  );
+
+  // --- Recherche de personnes (job en tâche de fond) ---
+  app.post("/api/b2b/prospect", (req, res) => {
+    const b = req.body as Record<string, unknown>;
+    const s = (k: string) => (typeof b[k] === "string" && (b[k] as string).trim() ? (b[k] as string).trim() : undefined);
+    const cont = Boolean(b.continue);
+    const roles = splitList(b.poste); // un ou plusieurs postes (séparés par virgule)
+    const companies = splitLines(b.entreprises); // boîtes cibles, une par ligne
+    if (!cont && !roles.length) {
+      return res.status(400).json({ error: "Indiquez au moins un poste recherché (ex. directeur commercial)" });
+    }
+    const target = Math.min(Math.max(Math.round(Number(b.target)) || 50, 5), 1000);
+    const params = {
+      roles,
+      companies,
+      exclude: splitList(b.exclure),
+      location: s("localisation"),
+      sector: s("secteur"),
+      franceOnly: b.france === undefined ? true : Boolean(b.france),
+    };
+    const company: CompanyFilters = {
+      effectifs: new Set(splitList(b.taille)), // codes de tranche INSEE
+      sections: new Set(splitList(b.secteur_naf)), // sections NAF A..U
+      caMin: b.ca_min ? Number(b.ca_min) : undefined,
+    };
+    // recherche TOUJOURS par boîte : il faut une source de boîtes — liste fournie OU critères registre
+    if (!cont && !companies.length && !hasCompanyFilters(company)) {
+      return res.status(400).json({
+        error: "Indiquez des entreprises (une par ligne) ou des critères taille/secteur pour cibler des boîtes.",
+      });
+    }
+    if (!startProspecting(params, company, target, cont)) {
+      return res.status(409).json({ error: "Une recherche est déjà en cours" });
+    }
+    res.json({ ok: true });
+  });
+
+  app.get("/api/b2b/status", (_req, res) => res.json(jobStatus()));
+
+  // --- Arrêt du job en cours ---
+  app.post("/api/b2b/stop", (_req, res) => res.json({ stopped: stopProspecting() }));
+
+  // --- Emails (optionnel) : domaine deviné depuis l'entreprise → adresse ---
+  app.post("/api/b2b/emails", (req, res) => {
+    const { ids } = req.body as { ids?: number[] };
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: "ids[] est requis" });
+    if (!startEmailJob(ids.map(Number).filter(Number.isFinite))) {
+      return res.status(409).json({ error: "Un job est déjà en cours" });
+    }
+    res.json({ ok: true });
+  });
+
+  // --- Prospects ---
+  interface ProspectRow {
+    id: number;
+    first_name: string;
+    last_name: string;
+    role: string | null;
+    company: string | null;
+    location: string | null;
+    linkedin: string;
+    email: string | null;
+    email_status: string;
+    search_role: string | null;
+    company_effectif: string | null;
+    company_section: string | null;
+    company_ca: number | null;
+    in_contacts: number;
+  }
+
+  // libellés lisibles des attributs entreprise (effectif/secteur), pour table et CSV
+  const sizeLabel = (r: ProspectRow) => (r.company_effectif ? EFFECTIF_LABELS[r.company_effectif] ?? r.company_effectif : "");
+  const sectorLabel = (r: ProspectRow) => (r.company_section ? SECTION_LABELS[r.company_section] ?? r.company_section : "");
+
+  function queryProspects(query: Record<string, unknown>): ProspectRow[] {
+    const conds: string[] = [];
+    const params: unknown[] = [];
+    if (query.scope === "search") {
+      const sid = currentSearchId();
+      if (!sid) return [];
+      conds.push("search_id = ?");
+      params.push(sid);
+    }
+    if (query.ids) {
+      const ids = String(query.ids).split(",").map(Number).filter(Number.isFinite);
+      if (ids.length) {
+        conds.push(`id IN (${ids.map(() => "?").join(",")})`);
+        params.push(...ids);
+      }
+    }
+    if (query.role) {
+      // plusieurs mots-clés possibles, séparés par des virgules (ex. directeur,ceo)
+      const keywords = String(query.role).split(",").map((s) => s.trim()).filter(Boolean);
+      if (keywords.length) {
+        conds.push(`(${keywords.map(() => "role LIKE ?").join(" OR ")})`);
+        params.push(...keywords.map((k) => `%${k}%`));
+      }
+    }
+    if (query.q) {
+      conds.push("(first_name LIKE ? OR last_name LIKE ? OR company LIKE ? OR location LIKE ?)");
+      const like = `%${String(query.q)}%`;
+      params.push(like, like, like, like);
+    }
+    if (query.email) conds.push("email IS NOT NULL");
+    return db
+      .prepare(
+        `SELECT id, first_name, last_name, role, company, location, linkedin, email, email_status, search_role,
+                company_effectif, company_section, company_ca,
+                EXISTS(SELECT 1 FROM contacts ct WHERE ct.email = prospects.email) AS in_contacts
+         FROM prospects
+         ${conds.length ? "WHERE " + conds.join(" AND ") : ""}
+         ORDER BY id DESC
+         LIMIT 5000`
+      )
+      .all(...params) as ProspectRow[];
+  }
+
+  app.get("/api/b2b/prospects", (req, res) => {
+    const rows = queryProspects(req.query as Record<string, unknown>);
+    res.json(rows.map((r) => ({ ...r, company_size: sizeLabel(r), company_sector: sectorLabel(r) })));
+  });
+
+  // --- Export CSV (mêmes filtres que /api/b2b/prospects, ou ids=1,2,3) ---
+  app.get("/api/b2b/prospects.csv", (req, res) => {
+    const STATUS_FR: Record<string, string> = {
+      pending: "",
+      verified: "vérifié",
+      pattern: "pattern du site",
+      probable: "probable",
+      not_found: "introuvable",
+      no_domain: "sans domaine",
+    };
+    const rows = queryProspects(req.query as Record<string, unknown>);
+    const headers = ["prenom", "nom", "poste", "entreprise", "taille", "secteur", "ca", "localisation", "linkedin", "email", "statut_email"];
+    const cell = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lines = rows.map((r) =>
+      [r.first_name, r.last_name, r.role, r.company, sizeLabel(r), sectorLabel(r), r.company_ca ?? "", r.location, r.linkedin, r.email, STATUS_FR[r.email_status] ?? r.email_status]
+        .map(cell)
+        .join(";")
+    );
+    // BOM + point-virgule : ouverture directe dans Excel/Numbers FR
+    const csv = "\uFEFF" + [headers.join(";"), ...lines].join("\r\n");
+    res.setHeader("content-type", "text/csv; charset=utf-8");
+    res.setHeader("content-disposition", `attachment; filename="prospects-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(csv);
+  });
+}

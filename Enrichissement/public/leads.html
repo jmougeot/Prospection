@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enrichissement — Prospection</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="inline" style="justify-content:space-between">
+    <h1 style="margin:0">Prospection</h1>
+    <span id="searchApiBadge"></span>
+  </div>
+  <p class="muted" style="margin-top:-8px">
+    La recherche se fait <b>par entreprise</b> : indiquez un ou plusieurs postes, puis vos boîtes cibles — soit
+    une <b>liste</b> (une par ligne), soit des <b>critères</b> taille/secteur (le registre les énumère). Pour chaque
+    boîte, les profils LinkedIn au bon poste sont cherchés jusqu'à votre quota. Seules les personnes dont le poste
+    correspond sont gardées (nom, poste, entreprise, profil). Export CSV direct ; « Trouver les emails » complète les adresses.
+  </p>
+
+  <!-- Recherche -->
+  <div class="card">
+    <h2>Rechercher des personnes</h2>
+    <div class="row" style="align-items:flex-end">
+      <div class="grow">
+        <label class="muted">Poste(s) recherché(s) — Entrée pour ajouter</label>
+        <div class="tagbox" id="fPoste"><input placeholder="ex. directeur commercial"></div>
+      </div>
+      <div class="grow">
+        <label class="muted">Mots-clés à exclure (optionnel) — Entrée pour ajouter</label>
+        <div class="tagbox" id="fExclure"><input placeholder="ex. stagiaire"></div>
+      </div>
+      <div style="flex:0 0 110px">
+        <label class="muted">Prospects voulus</label>
+        <input id="fTarget" type="number" value="100" min="5" max="1000">
+      </div>
+      <div style="flex:0 0 auto">
+        <button onclick="search(false)" id="searchBtn">Rechercher</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px;align-items:flex-end">
+      <div class="grow">
+        <label class="muted">Entreprises cibles — une par ligne (nom d'usage, ex. « Capgemini ») — ou via les critères ci-dessous</label>
+        <textarea id="fEntreprises" rows="3" placeholder="Capgemini
+Decathlon
+BlaBlaCar" style="width:100%;resize:vertical"></textarea>
+        <div class="inline" style="gap:8px;margin-top:4px">
+          <label class="muted" style="cursor:pointer;text-decoration:underline">
+            Importer un CSV
+            <input type="file" id="fCsv" accept=".csv,text/csv" onchange="importCsv(this)" style="display:none">
+          </label>
+          <span class="muted">colonne « entreprise / nom / company », sinon la 1re colonne</span>
+        </div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px;align-items:flex-end">
+      <div class="grow">
+        <label class="muted">Localisation (villes, régions — optionnel) — Entrée pour ajouter</label>
+        <div class="tagbox" id="fLoc"><input placeholder="ex. Paris"></div>
+      </div>
+      <div style="flex:0 0 auto">
+        <label class="muted" style="display:flex;align-items:center;gap:6px;padding-bottom:8px"
+          title="Restreint aux profils fr.linkedin.com (membres situés en France)">
+          <input type="checkbox" id="fFrance" checked style="width:auto"> France uniquement
+        </label>
+      </div>
+      <div class="grow">
+        <label class="muted">Mots-clés (optionnel)</label>
+        <input id="fSecteur" placeholder="ex. SaaS, immobilier…">
+      </div>
+    </div>
+    <details style="margin-top:10px">
+      <summary class="muted" style="cursor:pointer">Ou cibler des entreprises par critères (taille, secteur, CA — France, via le registre)</summary>
+      <div class="row" style="margin-top:8px;align-items:flex-end">
+        <div style="flex:0 0 200px">
+          <label class="muted">Taille d'entreprise</label>
+          <select id="fTaille">
+            <option value="">Toutes tailles</option>
+            <option value="00,01,02,03">1 à 9 salariés</option>
+            <option value="11,12">10 à 49 salariés</option>
+            <option value="21,22,31">50 à 249 salariés</option>
+            <option value="32,41">250 à 999 salariés</option>
+            <option value="42,51,52,53">1 000 salariés et +</option>
+          </select>
+        </div>
+        <div style="flex:0 0 280px">
+          <label class="muted">Secteur d'activité</label>
+          <select id="fNaf"><option value="">Tous les secteurs</option></select>
+        </div>
+        <div style="flex:0 0 150px">
+          <label class="muted">CA minimum (€)</label>
+          <input id="fCaMin" type="number" placeholder="ex. 1000000">
+        </div>
+      </div>
+      <p class="muted" style="margin:6px 0 0">
+        France uniquement. Les entreprises correspondant à ces critères sont énumérées depuis le registre
+        (gratuit), puis chaque boîte est ciblée par sa propre requête LinkedIn. Combinable avec la liste
+        ci-dessus — fournissez une liste, des critères, ou les deux.
+      </p>
+    </details>
+  </div>
+
+  <!-- Prospects -->
+  <div class="card" id="leadsCard">
+    <div class="inline" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">Prospects</h2>
+      <button class="ghost" id="emailBtn" onclick="findEmails()"
+        title="Pour la sélection (ou tout le tableau filtré) : site de l'entreprise → pattern d'adresses → un email par prospect, vérifié quand c'est possible">Trouver les emails</button>
+    </div>
+    <div id="jobProgress" hidden style="margin:10px 0">
+      <div class="bar"><div id="jobBar" style="width:0%"></div></div>
+      <div class="inline" style="gap:8px;margin-top:4px">
+        <span class="muted" id="jobLabel"></span>
+        <button class="ghost" id="stopBtn" onclick="stopSearch()" hidden>Arrêter</button>
+      </div>
+    </div>
+    <div class="inline" style="flex-wrap:wrap;margin-top:8px">
+      <select id="lScope" style="width:180px" onchange="loadProspects()">
+        <option value="search">Recherche en cours</option>
+        <option value="all">Tous les prospects</option>
+      </select>
+      <input id="lRole" placeholder="Poste contient… (ex. directeur)" style="width:210px" onchange="loadProspects()">
+      <input id="lQ" placeholder="Filtrer (nom, entreprise, ville…)" style="width:210px" onchange="loadProspects()">
+      <label class="muted" style="display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="lEmail" onchange="loadProspects()" style="width:auto"> avec email
+      </label>
+    </div>
+    <table style="margin-top:10px">
+      <thead><tr>
+        <th style="width:28px"><input type="checkbox" id="ckAll" onchange="toggleAll(this.checked)"></th>
+        <th>Contact</th><th>Poste</th><th>Entreprise</th><th>Taille</th><th>Localisation</th><th>LinkedIn</th><th>Email</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p><button class="ghost" id="moreBtn" onclick="search(true)" hidden>Chercher plus de prospects</button></p>
+    <div class="inline" style="margin-top:12px;flex-wrap:wrap">
+      <span class="muted" id="count"></span>
+      <span style="flex:1"></span>
+      <button class="ghost" onclick="exportCsv()">⬇ Exporter en CSV</button>
+    </div>
+    <p class="muted">Sélection vide = tout le tableau filtré. L'export CSV inclut toujours le LinkedIn et l'email
+      quand il a été trouvé (« Trouver les emails »).</p>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>
+renderNav("leads.html");
+
+const EMAIL_STATUS = {
+  verified: ["vérifié", "replied"],
+  pattern: ["pattern du site", "in_progress"],
+  probable: ["probable", "paused"],
+  not_found: ["introuvable", "failed"],
+  no_domain: ["sans domaine", "failed"],
+};
+const state = { jobRunning: false, hasSearch: false };
+
+/*
+ * Champ à puces : Entrée (ou virgule, ou perte de focus) ajoute la valeur tapée,
+ * × ou Retour arrière (champ vide) retire. Un texte collé avec des virgules est
+ * découpé en plusieurs puces. `value()` rend les puces jointes par des virgules,
+ * le format que l'API découpe déjà.
+ */
+function tagInput(sel) {
+  const box = $(sel);
+  const input = box.querySelector("input");
+  const placeholder = input.placeholder;
+  const values = [];
+  function render() {
+    box.querySelectorAll(".tag").forEach((t) => t.remove());
+    values.forEach((v, i) => {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = v;
+      const x = document.createElement("button");
+      x.type = "button";
+      x.textContent = "×";
+      x.title = "Retirer";
+      x.onclick = (e) => { e.stopPropagation(); values.splice(i, 1); render(); };
+      tag.appendChild(x);
+      box.insertBefore(tag, input);
+    });
+    input.placeholder = values.length ? "" : placeholder;
+  }
+  function add(text) {
+    for (const part of String(text).split(/[,;]+/)) {
+      const v = part.trim();
+      if (v && !values.some((x) => x.toLowerCase() === v.toLowerCase())) values.push(v);
+    }
+    input.value = "";
+    render();
+  }
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(input.value); }
+    else if (e.key === "Backspace" && !input.value && values.length) { values.pop(); render(); }
+  });
+  input.addEventListener("blur", () => add(input.value));
+  box.addEventListener("click", () => input.focus());
+  return { value: () => values.join(", "), count: () => values.length };
+}
+
+const fPoste = tagInput("#fPoste");
+const fExclure = tagInput("#fExclure");
+const fLoc = tagInput("#fLoc");
+
+async function init() {
+  const meta = await api("/api/b2b/meta");
+  $("#searchApiBadge").innerHTML = meta.search_api
+    ? '<span class="pill replied" title="Une API de recherche est configurée dans .env">API de recherche active</span>'
+    : '<span class="pill held" title="Aucune clé d\'API de recherche : profils cherchés via moteurs publics, résultats limités. Une clé gratuite (Serper recommandé) fiabilise et multiplie les résultats — voir .env.example">moteurs publics — résultats limités</span>';
+  // secteurs d'activité (sections NAF) pour le filtre entreprise
+  $("#fNaf").innerHTML += Object.entries(meta.sections || {})
+    .map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("");
+  // un job tournait déjà (page rechargée) : on raccroche le suivi
+  const s = await api("/api/b2b/status").catch(() => null);
+  if (s) {
+    state.hasSearch = Boolean(s.search_id);
+    updateMoreBtn(s);
+    if (s.running) trackJob(s.mode);
+  }
+  loadProspects();
+}
+
+function targetValue() {
+  return Math.min(Math.max(+$("#fTarget").value || 100, 5), 1000);
+}
+
+// --- Import CSV des noms d'entreprises -------------------------------------
+// Parsé côté navigateur : on ajoute les noms au textarea (dédoublonnés), pour
+// que tu puisses relire/éditer avant de lancer.
+function importCsv(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const names = companiesFromCsv(String(reader.result));
+      if (!names.length) return notify("Aucune entreprise trouvée dans le CSV.", false);
+      const existing = $("#fEntreprises").value.split(/\n/).map((s) => s.trim()).filter(Boolean);
+      $("#fEntreprises").value = [...new Set([...existing, ...names])].join("\n");
+      notify(names.length + " entreprise(s) importée(s) du CSV.");
+    } catch (e) {
+      notify("CSV illisible : " + e.message, false);
+    }
+  };
+  reader.readAsText(file);
+  input.value = ""; // permet de réimporter le même fichier
+}
+
+// Extrait la colonne entreprise d'un CSV : on prend la colonne dont l'en-tête
+// ressemble à « entreprise/company/nom… », sinon la 1re colonne.
+function companiesFromCsv(text) {
+  const firstLine = text.split(/\r?\n/, 1)[0] || "";
+  const delim = firstLine.split(";").length > firstLine.split(",").length ? ";" : ",";
+  const rows = parseCsvRows(text, delim);
+  if (!rows.length) return [];
+  // en-têtes du plus spécifique (entreprise) au plus générique (nom), pour ne pas
+  // confondre « nom » = personne avec « company » = boîte dans un CSV de contacts
+  const HEAD = ["entreprise", "entreprises", "company", "société", "societe", "raison sociale",
+    "raison_sociale", "compte", "account", "organisation", "organization", "nom", "name"];
+  const ANYHEAD = HEAD.concat(["siren", "siret", "domain", "domaine", "ville", "email", "poste",
+    "url", "linkedin", "prénom", "prenom", "first", "last"]);
+  const first = rows[0].map((c) => c.trim().toLowerCase());
+  let col = 0, data = rows;
+  if (first.some((c) => ANYHEAD.includes(c))) {
+    for (const h of HEAD) { const i = first.indexOf(h); if (i >= 0) { col = i; break; } }
+    data = rows.slice(1); // on saute la ligne d'en-tête
+  }
+  return [...new Set(data.map((r) => (r[col] || "").trim()).filter(Boolean))];
+}
+
+// Mini-parseur CSV (gère les guillemets et les champs multi-lignes).
+function parseCsvRows(text, delim) {
+  const rows = [];
+  let row = [], field = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; }
+      else field += c;
+    } else if (c === '"') q = true;
+    else if (c === delim) { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); rows.push(row); row = []; field = "";
+    } else field += c;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows.filter((r) => r.some((c) => c.trim()));
+}
+
+async function search(more) {
+  const body = {
+    poste: fPoste.value() || undefined,
+    entreprises: $("#fEntreprises").value.trim() || undefined,
+    exclure: fExclure.value() || undefined,
+    localisation: fLoc.value() || undefined,
+    secteur: $("#fSecteur").value.trim() || undefined,
+    france: $("#fFrance").checked,
+    taille: $("#fTaille").value || undefined,
+    secteur_naf: $("#fNaf").value || undefined,
+    ca_min: $("#fCaMin").value || undefined,
+    target: targetValue(),
+    continue: more,
+  };
+  if (!more) {
+    $("#lScope").value = "search";
+    $("#lRole").value = "";
+    $("#lQ").value = "";
+    $("#lEmail").checked = false;
+  }
+  $("#searchBtn").disabled = true;
+  try {
+    await api("/api/b2b/prospect", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    state.hasSearch = true;
+    $("#moreBtn").hidden = true;
+    loadProspects();
+    trackJob("prospect");
+  } catch (e) {
+    notify(e.message, false);
+  } finally {
+    $("#searchBtn").disabled = false;
+  }
+}
+
+function findEmails() {
+  const ids = $$(".ck:checked").map((c) => +c.value);
+  const scope = ids.length ? ids : prospects.filter((p) => !p.email).map((p) => p.id);
+  if (!scope.length) return notify("Aucun prospect sans email dans le tableau.", false);
+  api("/api/b2b/emails", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: scope }),
+  })
+    .then(() => trackJob("emails"))
+    .catch((e) => notify(e.message, false));
+}
+
+function setJobRunning(running) {
+  state.jobRunning = running;
+  $("#searchBtn").disabled = running;
+  $("#emailBtn").disabled = running;
+  $("#moreBtn").disabled = running;
+  $("#stopBtn").hidden = !running;
+  $("#stopBtn").disabled = false;
+}
+
+/* Arrête le job en cours (bouton « Arrêter »). */
+async function stopSearch() {
+  $("#stopBtn").disabled = true;
+  try {
+    await api("/api/b2b/stop", { method: "POST" });
+    notify("Arrêt demandé — la recherche s'interrompt.");
+  } catch (e) {
+    notify(e.message, false);
+  }
+}
+
+function updateMoreBtn(s) {
+  const more = !s.running && state.hasSearch && s.has_more;
+  $("#moreBtn").hidden = !more;
+  if (more) $("#moreBtn").textContent = `Chercher ${targetValue()} prospect(s) de plus`;
+}
+
+/* Suit le job en cours : barre, libellé, prospects affichés au fil de l'eau. */
+function trackJob(mode) {
+  setJobRunning(true);
+  $("#jobProgress").hidden = false;
+  let lastFound = -1;
+  const poll = setInterval(async () => {
+    const s = await api("/api/b2b/status").catch(() => null);
+    if (!s) return;
+    let pct, label;
+    if (mode === "prospect") {
+      pct = s.target ? Math.min(100, Math.round((s.found / s.target) * 100)) : 0;
+      label = `${s.found}/${s.target} prospect(s) · ${s.done} requête(s)` + (s.current ? ` — ${s.current}` : "");
+    } else {
+      pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
+      label = `${s.done}/${s.total} entreprise(s) · ${s.found} email(s)` + (s.current ? ` — ${s.current}` : "");
+    }
+    $("#jobBar").style.width = pct + "%";
+    $("#jobLabel").textContent = label;
+    if (s.found !== lastFound) { lastFound = s.found; loadProspects(); }
+    if (!s.running) {
+      clearInterval(poll);
+      setJobRunning(false);
+      state.hasSearch = Boolean(s.search_id);
+      updateMoreBtn(s);
+      setTimeout(() => ($("#jobProgress").hidden = true), 5000);
+      if (s.errors.length) notify(`Terminé avec ${s.errors.length} erreur(s) : ${s.errors[0]}`, false);
+      else if (mode === "prospect") notify(`Recherche terminée : ${s.found} prospect(s).`);
+      else notify(`Emails : ${s.found} adresse(s) trouvée(s).`);
+      loadProspects();
+    }
+  }, 1500);
+}
+
+let prospects = [];
+function prospectParams() {
+  const params = new URLSearchParams();
+  if ($("#lScope").value === "search") params.set("scope", "search");
+  if ($("#lRole").value.trim()) params.set("role", $("#lRole").value.trim());
+  if ($("#lQ").value.trim()) params.set("q", $("#lQ").value.trim());
+  if ($("#lEmail").checked) params.set("email", "1");
+  return params;
+}
+
+async function loadProspects() {
+  prospects = await api("/api/b2b/prospects?" + prospectParams());
+  const emptyMsg = state.jobRunning
+    ? "Recherche en cours… les prospects apparaissent ici au fur et à mesure."
+    : ($("#lScope").value === "search" && !state.hasSearch
+      ? "Aucune recherche — lancez-en une ci-dessus, ou passez sur « Tous les prospects »."
+      : "Aucun prospect.");
+  $("#rows").innerHTML = prospects.map((p) => {
+    const [label, cls] = EMAIL_STATUS[p.email_status] || [];
+    return `<tr>
+      <td><input type="checkbox" class="ck" value="${p.id}"></td>
+      <td><b>${esc(p.first_name)} ${esc(p.last_name)}</b>${p.in_contacts ? ' <span class="muted" title="déjà dans vos contacts">✓ importé</span>' : ""}</td>
+      <td>${esc(p.role || "—")}</td>
+      <td>${esc(p.company || "—")}${p.company_sector ? `<br><span class="muted" style="font-size:.85em">${esc(p.company_sector)}</span>` : ""}</td>
+      <td>${esc(p.company_size || "—")}</td>
+      <td>${esc(p.location || "—")}</td>
+      <td><a href="${esc(p.linkedin)}" target="_blank" rel="noopener">Profil ↗</a></td>
+      <td>${p.email ? esc(p.email) + (label ? ` <span class="pill ${cls}">${esc(label)}</span>` : "")
+        : (label ? `<span class="pill ${cls}">${esc(label)}</span>` : '<span class="muted">—</span>')}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="8" class="muted">${emptyMsg}</td></tr>`;
+  $("#count").textContent = prospects.length
+    ? `${prospects.length} prospect(s) · ${prospects.filter((p) => p.email).length} avec email`
+    : "";
+}
+
+function toggleAll(checked) {
+  $$(".ck").forEach((c) => (c.checked = checked));
+}
+
+function exportCsv() {
+  const params = prospectParams();
+  const ids = $$(".ck:checked").map((c) => c.value);
+  if (ids.length) params.set("ids", ids.join(","));
+  if (!ids.length && !prospects.length) return notify("Rien à exporter.", false);
+  window.location.href = "/api/b2b/prospects.csv?" + params;
+}
+
+init();
+</script>
+</body>
+</html>
