@@ -5,3 +5,5 @@ data/*.db-shm
 data/*.log
 .env
 dist/
+Enrichissement.app/*
+Sequence Mail.app/*

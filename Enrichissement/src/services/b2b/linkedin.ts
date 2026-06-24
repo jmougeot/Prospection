@@ -1,163 +1,18 @@
 /**
- * Recherche directe de personnes par poste sur LinkedIn, via les moteurs de
- * recherche : une requête `site:linkedin.com/in "<poste>" "<ville>"` renvoie
- * ~10 profils par page, presque tous au bon poste — bien plus dense que de
- * parcourir des entreprises une à une. Deux sources, dans l'ordre :
- * 1. une API de recherche (Google CSE / Serper / Brave) si une clé est
- *    configurée — fiable, paginable (jusqu'à ~10 pages par requête) ;
- * 2. sinon, scraping de moteurs publics (Yahoo → Ecosia → Bing → DuckDuckGo,
- *    avec quarantaine du moteur qui bloque).
- * Chaque résultat est interprété en personne (nom, poste, entreprise,
- * localisation) ; le slug du profil doit correspondre au nom (anti-bruit) et
- * seuls les postes correspondant strictement au mot-clé sont gardés.
+ * Recherche directe de personnes par poste sur LinkedIn, via une API de recherche
+ * (Google CSE / Serper / Brave) : une requête `site:linkedin.com/in "<poste>"
+ * "<entreprise>"` renvoie ~10 profils par page, presque tous au bon poste. Chaque
+ * résultat (titre + snippet) est interprété en personne par le modèle d'extraction
+ * (extract.ts, Haiku) — nom, poste, entreprise, lieu. Le slug du profil doit
+ * correspondre au nom (anti-bruit) ; le filtrage strict du poste se fait côté job.
  */
-import { deaccent, decodeEntities, fetchPage, normName as norm, titleCase, JOB_WORD_RE } from "./domain.js";
-import { apiSearch } from "./search.js";
+import { deaccent, normName as norm, titleCase } from "./domain.js";
+import { apiSearch, hasSearchApi, type WebResult } from "./search.js";
+import { extractPeople, hasExtractor } from "./extract.js";
 
-// `url(q, page)` renvoie l'URL de la page de résultats demandée (0-based), ou
-// null si le moteur ne pagine pas en GET (DuckDuckGo exige un POST).
-// Les instances SearXNG publiques relaient Google/Bing : précieuses quand les
-// moteurs directs bloquent ; si une instance disparaît, la quarantaine l'écarte.
-const ENGINES: Array<{ name: string; url: (q: string, page: number) => string | null }> = [
-  { name: "yahoo-fr", url: (q, p) => `https://fr.search.yahoo.com/search?p=${q}&b=${1 + p * 10}` },
-  { name: "yahoo", url: (q, p) => `https://search.yahoo.com/search?p=${q}&b=${1 + p * 10}` },
-  { name: "ecosia", url: (q, p) => `https://www.ecosia.org/search?q=${q}&p=${p}` },
-  { name: "mojeek", url: (q, p) => `https://www.mojeek.com/search?q=${q}&s=${1 + p * 10}` },
-  { name: "searx-be", url: (q, p) => `https://searx.be/search?q=${q}&language=fr-FR&pageno=${p + 1}` },
-  { name: "searx-tiekoetter", url: (q, p) => `https://searx.tiekoetter.com/search?q=${q}&language=fr-FR&pageno=${p + 1}` },
-  { name: "bing", url: (q, p) => `https://www.bing.com/search?q=${q}&setlang=fr&first=${1 + p * 10}` },
-  { name: "ddg", url: (q, p) => (p ? null : `https://html.duckduckgo.com/html/?q=${q}`) },
-  { name: "ddg-lite", url: (q, p) => (p ? null : `https://lite.duckduckgo.com/lite/?q=${q}`) },
-];
-
-// Moteur en échec réseau/HTTP : 5 min de quarantaine ; page anti-bot
-// explicite (captcha…) : 15 min — insister ne ferait qu'allonger le ban.
-const COOLDOWN_FAIL_MS = 5 * 60 * 1000;
-const COOLDOWN_BLOCK_MS = 15 * 60 * 1000;
-const cooldownUntil = new Map<string, number>();
-
-// Un moteur qui répond HTTP 200 mais sans rien d'exploitable sur plusieurs
-// requêtes d'affilée (soft-block : page servie mais résultats masqués) est
-// aussi mis en quarantaine, sinon il ferait perdre du temps indéfiniment.
-const EMPTY_STREAK_LIMIT = 4;
-const emptyStreak = new Map<string, number>();
-
-/**
- * Tous les moteurs publics sont-ils en quarantaine ? Quand c'est le cas (et
- * sans clé d'API), continuer une recherche ne peut rien donner : l'appelant
- * doit s'interrompre proprement plutôt que d'enchaîner des requêtes vides.
- */
-export function allEnginesQuarantined(): boolean {
-  const now = Date.now();
-  return ENGINES.every((e) => (cooldownUntil.get(e.name) ?? 0) > now);
-}
-
-// Throttle PAR MOTEUR (~2,5-4 s avec jitter entre deux requêtes au même
-// moteur) : interroger yahoo puis ecosia n'attend presque pas. Le créneau est
-// réservé avant l'attente, donc sûr avec plusieurs workers. Un petit
-// espacement global évite les rafales réseau.
-const ENGINE_GAP_MS = 2500;
-const GLOBAL_GAP_MS = 300;
-const engineNextAt = new Map<string, number>();
-let globalNextAt = 0;
-async function politeDelay(engine: string): Promise<void> {
-  const now = Date.now();
-  const at = Math.max(engineNextAt.get(engine) ?? 0, globalNextAt, now);
-  engineNextAt.set(engine, at + ENGINE_GAP_MS + Math.floor(Math.random() * 1500));
-  globalNextAt = at + GLOBAL_GAP_MS;
-  if (at > now) await new Promise((r) => setTimeout(r, at - now));
-}
-
-/** Liens de tracking bing.com/ck/a : cible en base64url dans le paramètre u (préfixe "a1"). */
-function decodeBingUrl(href: string): string | null {
-  const m = /[?&]u=a1([A-Za-z0-9_-]+)/.exec(href);
-  if (!m) return null;
-  try {
-    return Buffer.from(m[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Interroge les moteurs publics dans l'ordre (quarantaine des moteurs bloqués)
- * et fusionne les résultats de `engines` moteurs ayant répondu, sur `pages`
- * pages de résultats chacun quand le moteur sait paginer.
- * Renvoie null si aucun moteur n'a rien donné.
- */
-async function scrapeEngines<T>(
-  query: string,
-  parse: (html: string) => T[],
-  opts: { engines?: number; pages?: number } = {}
-): Promise<T[] | null> {
-  const wantEngines = opts.engines ?? 1;
-  const maxPages = opts.pages ?? 1;
-  const q = encodeURIComponent(query);
-  const out: T[] = [];
-  let responded = 0;
-  for (const engine of ENGINES) {
-    if (responded >= wantEngines) break;
-    if ((cooldownUntil.get(engine.name) ?? 0) > Date.now()) continue;
-    let gave = false;
-    for (let p = 0; p < maxPages; p++) {
-      const url = engine.url(q, p);
-      if (!url) break; // ce moteur ne pagine pas en GET
-      await politeDelay(engine.name);
-      const page = await fetchPage(url);
-      if (!page) {
-        cooldownUntil.set(engine.name, Date.now() + COOLDOWN_FAIL_MS);
-        break;
-      }
-      const items = parse(page.html);
-      if (!items.length) {
-        // page anti-bot → quarantaine ; vide à répétition → soft-block probable
-        if (/captcha|challenge|anomaly|unusual traffic/i.test(page.html)) {
-          cooldownUntil.set(engine.name, Date.now() + COOLDOWN_BLOCK_MS);
-        } else if (p === 0) {
-          const streak = (emptyStreak.get(engine.name) ?? 0) + 1;
-          emptyStreak.set(engine.name, streak);
-          if (streak >= EMPTY_STREAK_LIMIT) {
-            cooldownUntil.set(engine.name, Date.now() + COOLDOWN_FAIL_MS);
-            emptyStreak.set(engine.name, 0);
-          }
-        }
-        break;
-      }
-      emptyStreak.set(engine.name, 0);
-      out.push(...items);
-      gave = true;
-    }
-    if (gave) responded++;
-  }
-  return responded ? out : null;
-}
-
-const PROFILE_RE = /https?:\/\/([a-z]{2,3}\.)?linkedin\.com\/in\/[a-zA-Z0-9%_.\-]+/g;
-// même motif sans /g : exec() → première occurrence, sans état lastIndex partagé
-const PROFILE_ONE = new RegExp(PROFILE_RE.source);
-
-/** Ancres de la page de résultats dont la cible est un profil : URL → textes (titres). */
-function profileAnchors(html: string): Map<string, string[]> {
-  const map = new Map<string, string[]>();
-  for (const m of html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/gs)) {
-    const href = m[1].replace(/&amp;/g, "&");
-    let target = href.includes("bing.com/ck/") ? (decodeBingUrl(href) ?? "") : href;
-    try {
-      target = decodeURIComponent(target);
-    } catch {
-      /* encodage partiel : on garde brut */
-    }
-    target = target.replace(/%2f/gi, "/").replace(/%3a/gi, ":");
-    const prof = PROFILE_ONE.exec(target);
-    if (!prof) continue;
-    const url = prof[0].replace(/\/+$/, "");
-    const title = decodeEntities(m[2].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
-    if (!title) continue;
-    if (map.has(url)) map.get(url)!.push(title);
-    else map.set(url, [title]);
-  }
-  return map;
-}
+// URL de profil LinkedIn (sous-domaine pays optionnel). Sans /g : exec() renvoie
+// la première occurrence, sans état lastIndex partagé.
+const PROFILE_ONE = /https?:\/\/([a-z]{2,3}\.)?linkedin\.com\/in\/[a-zA-Z0-9%_.\-]+/;
 
 // --- Postes : équivalences strictes et correspondance ------------------------
 
@@ -264,51 +119,26 @@ export function roleTerms(keyword: string): string[] {
   return [kw];
 }
 
-// --- Interprétation d'un résultat de recherche en personne --------------------
+// --- Personne ----------------------------------------------------------------
 
 export interface Prospect {
   first_name: string;
   last_name: string;
   role: string | null; // poste lu dans le résultat
   company: string | null; // entreprise lue dans le résultat
+  company_domain: string | null; // domaine probable de l'entreprise (modèle, non vérifié)
+  headcount_est: string | null; // effectif mondial estimé, ordre de grandeur (modèle, indicatif)
+  revenue_est: string | null; // CA annuel estimé, ordre de grandeur (modèle, indicatif)
   location: string | null; // localisation lue dans le résultat
   linkedin: string; // URL du profil
 }
 
-// Segment de titre qui est une localisation, pas un poste ni une entreprise
-const LOCATION_SEG = /^(r[ée]gion|greater|m[ée]tropole)\b|p[ée]riph[ée]rie|, france$/i;
-
 /**
- * Interprète un résultat de recherche (titres + texte) en personne. Formats
- * usuels : « Prénom Nom - Poste - Entreprise | LinkedIn », « Prénom Nom -
- * Entreprise | LinkedIn », « Prénom Nom - Poste chez Entreprise »… Renvoie
- * null si le titre ne ressemble pas à une personne ou si le slug du profil ne
- * correspond pas au nom (homonymes, pages diverses).
+ * Le slug du profil (…/in/<slug>) reflète-t-il le nom ? Garde-fou anti-bruit /
+ * anti-hallucination : un résultat dont l'URL ne reflète pas le nom extrait n'est
+ * pas la bonne personne (pages diverses, homonymes, nom inventé par le modèle).
  */
-function parseProspect(url: string, titles: string[], extraText: string, terms: string[]): Prospect | null {
-  const cleaned = titles
-    .map((t) =>
-      t
-        .replace(/^.*?\bin\b\s*[›·]\s*\S+\s+/i, "") // fil d'Ariane "linkedin.com › in › slug"
-        .replace(/\s*[|·–—-]\s*LinkedIn\s*$/i, "")
-        .replace(/\s*sur LinkedIn.*$/i, "")
-        .trim()
-    )
-    .filter(Boolean);
-  // titre le plus riche (avec séparateurs) d'abord, sinon vignette "Prénom Nom"
-  const withSep = cleaned.filter((t) => /\s[-–—|·]\s/.test(t)).sort((a, b) => b.length - a.length)[0];
-  const nameOnly = cleaned.filter((t) => !/\s[-–—|·]\s/.test(t)).sort((a, b) => a.length - b.length)[0];
-  const title = withSep ?? nameOnly;
-  if (!title) return null;
-
-  const segments = title.split(/\s+[-–—|·]\s+/).map((s) => s.trim()).filter(Boolean);
-  const name = segments[0] ?? "";
-  const tokens = name.split(/\s+/);
-  if (tokens.length < 2 || tokens.length > 4 || /[\d@©]/.test(name)) return null;
-  const first = titleCase(tokens[0]);
-  const last = titleCase(tokens.slice(1).join(" "));
-
-  // le slug du profil doit correspondre au nom (anti-bruit)
+export function slugMatchesName(url: string, first: string, last: string): boolean {
   let slug = url.split("/in/")[1] ?? "";
   try {
     slug = decodeURIComponent(slug);
@@ -316,59 +146,18 @@ function parseProspect(url: string, titles: string[], extraText: string, terms: 
     /* garde brut */
   }
   const slugNorm = norm(slug);
-  if (!slugNorm.includes(norm(last).slice(0, 6)) && !slugNorm.includes(norm(first))) return null;
-
-  let role: string | null = null;
-  let company: string | null = null;
-  let location: string | null = null;
-  for (const seg of segments.slice(1)) {
-    const chez = /^(.*?)\s*\bchez\s+(.+)$/i.exec(seg);
-    if (chez) {
-      if (!role && chez[1].trim()) role = chez[1].trim();
-      if (!company) company = chez[2].trim();
-    } else if (LOCATION_SEG.test(seg)) {
-      location ??= seg;
-    } else if (!role && (roleMatches(seg, terms) || JOB_WORD_RE.test(seg))) {
-      // un segment n'est un poste que s'il y ressemble — sinon c'est l'entreprise
-      role = seg;
-    } else if (!company) {
-      company = seg;
-    }
-  }
-  if (role && /linkedin|profils?\b|\bposts?\b|relations\b/i.test(role)) role = null;
-
-  // le texte du résultat (snippet) complète ce que le titre ne dit pas
-  if (!company) {
-    company =
-      /(?:\bchez|\bat)\s+([^·|;.]{2,60}?)(?=\s*[·|;.]|$)/im.exec(extraText)?.[1]?.trim() ??
-      /exp[ée]rience\s*:\s*([^·|;.]{2,60})/i.exec(extraText)?.[1]?.trim() ??
-      null;
-  }
-  if (!location) {
-    location =
-      /lieu\s*:\s*([^·|;]{2,40})/i.exec(extraText)?.[1]?.trim() ??
-      /(r[ée]gion de [^·|;,.]{2,30})/i.exec(`${title} · ${extraText}`)?.[1]?.trim() ??
-      null;
-  }
-  // poste absent du titre mais terme présent dans le texte : on retient ce
-  // terme comme poste plutôt que de jeter le profil
-  if (!role) {
-    const t = terms.find((term) => roleMatches(`${title} ${extraText}`, [term]));
-    if (t) role = titleCase(t);
-  }
-  if (company && norm(company) === norm(name)) company = null;
-  return { first_name: first, last_name: last, role, company, location, linkedin: url };
+  return slugNorm.includes(norm(last).slice(0, 6)) || slugNorm.includes(norm(first));
 }
 
 // --- Requêtes et collecte -----------------------------------------------------
 
 export interface PeopleSearchParams {
   roles: string[]; // postes recherchés (texte libre, au moins un)
-  companies?: string[]; // boîtes cibles fournies par l'utilisateur (mode par boîte)
+  companies?: string[]; // boîtes cibles (liste fournie + sélection base enrichie)
   exclude?: string[]; // mots-clés à bannir du titre/de l'entreprise (ex. "senior")
   location?: string; // villes/régions, séparées par des virgules (optionnel)
   sector?: string; // mots-clés libres ajoutés à la requête (optionnel)
-  franceOnly?: boolean; // limite aux profils fr.linkedin.com (membres en France)
+  franceOnly?: boolean; // ajoute le sous-domaine fr.linkedin.com aux requêtes
 }
 
 /** Localisations demandées, découpées (« Paris, Lyon » → ["Paris", "Lyon"]). */
@@ -392,12 +181,10 @@ export function isExcluded(text: string | null, exclude: string[]): boolean {
 }
 
 /**
- * Requête ciblée sur UNE entreprise (mode « ciblage par entreprises ») : les
- * postes — tous synonymes confondus, 4 max, en OR — doivent apparaître avec le
- * nom de la boîte. Chaque entreprise ouvre ainsi son propre espace de résultats,
- * au lieu d'écumer les ~100 résultats d'une requête générique. Localisation et
- * mots-clés secteur sont volontairement omis (la requête est déjà très étroite) ;
- * ils restent appliqués au filtrage des résultats.
+ * Requête ciblée sur UNE entreprise : les postes — tous synonymes confondus,
+ * 4 max, en OR — doivent apparaître avec le nom de la boîte. Chaque entreprise
+ * ouvre son propre espace de résultats. Localisation/secteur sont omis de la
+ * requête (déjà étroite) et réappliqués au filtrage.
  */
 export function companyQueries(params: PeopleSearchParams, companyName: string): string[] {
   const sites = params.franceOnly
@@ -406,87 +193,83 @@ export function companyQueries(params: PeopleSearchParams, companyName: string):
   const terms = allRoleTerms(params.roles).slice(0, 4);
   const block = terms.length > 1 ? `(${terms.map((t) => `"${t}"`).join(" OR ")})` : `"${terms[0] ?? ""}"`;
   const neg = (params.exclude ?? []).map((e) => `-"${e}"`).join(" ");
-  // deux sous-domaines quand franceOnly → plus de profils par boîte ; nom de
-  // boîte quoté (cible exacte), postes en OR ; localisation/secteur réappliqués
-  // au filtrage (la requête est déjà étroite grâce au nom de boîte).
   return sites.map((site) => `${site} ${block} "${companyName}"${neg ? ` ${neg}` : ""}`.replace(/\s+/g, " ").trim());
 }
 
 /**
- * Requêtes du plan de recherche : une par poste × terme × localisation. Chaque
- * requête a son propre espace de résultats (~10 par page, jusqu'à ~10 pages via
- * l'API) : multiplier les requêtes multiplie les profils. Les mots-clés exclus
- * partent en opérateur `-"mot"` (Google/Serper les retirent à la source) en
- * plus du filtrage côté résultats. LinkedIn publie les profils des membres
- * français sous fr.linkedin.com : `franceOnly` restreint à ce sous-domaine,
- * bien plus précis qu'un mot-clé de ville pour écarter les profils hors France.
+ * Extraction LLM d'un lot de résultats. Chaque profil est identifié par son URL
+ * (clé stable que le modèle ré-échoue — on remappe par elle, jamais par l'ordre)
+ * et dédoublonné, en gardant le snippet le plus riche. Le slug du profil doit
+ * refléter le nom extrait (anti-bruit / anti-hallucination).
  */
-export function buildQueries(params: PeopleSearchParams): string[] {
-  // franceOnly : on interroge le sous-domaine français ET le domaine global
-  // (qui inclut des profils français indexés sous www) — bien plus de volume,
-  // la localisation reste filtrée au traitement des résultats.
-  const sites = params.franceOnly
-    ? ["site:fr.linkedin.com/in", "site:linkedin.com/in"]
-    : ["site:linkedin.com/in"];
-  const locations = locationList(params.location);
-  const sector = (params.sector ?? "").trim();
-  const neg = (params.exclude ?? []).map((e) => `-"${e}"`).join(" ");
-  const queries: string[] = [];
-  for (const role of params.roles) {
-    // poste et localisation NON quotés : « responsable achats » remonte aussi
-    // « Responsable des achats », « Responsable Achats Groupe »… La précision du
-    // poste (et de la ville) est rétablie au filtrage (roleMatches, strict).
-    for (const t of roleTerms(role).slice(0, 6)) {
-      for (const loc of locations.length ? locations : [""]) {
-        for (const site of sites) {
-          queries.push(
-            `${site} ${t}${loc ? ` ${loc}` : ""}${sector ? ` ${sector}` : ""}${neg ? ` ${neg}` : ""}`
-              .replace(/\s+/g, " ")
-              .trim()
-          );
-        }
-      }
-    }
-  }
-  return [...new Set(queries)];
-}
-
-/**
- * Une page de résultats d'une requête via l'API de recherche configurée,
- * interprétée en personnes. Renvoie null si aucune API n'est configurée ou
- * disponible (l'appelant bascule sur le scraping public). `raw` permet à
- * l'appelant de détecter une requête épuisée (moins de 10 résultats bruts).
- */
-export async function fetchProspectsPage(
-  query: string,
-  page: number,
-  terms: string[]
-): Promise<{ prospects: Prospect[]; raw: number } | null> {
-  const results = await apiSearch(query, page);
-  if (results === null) return null;
-  const prospects: Prospect[] = [];
+export async function extractProspects(results: WebResult[]): Promise<Prospect[]> {
+  const byId = new Map<string, { id: string; text: string }>();
   for (const r of results) {
     const m = PROFILE_ONE.exec(r.url) ?? PROFILE_ONE.exec(`${r.title} ${r.snippet}`);
     if (!m) continue;
-    const p = parseProspect(m[0].replace(/\/+$/, ""), [r.title], r.snippet, terms);
-    if (p) prospects.push(p);
+    const url = m[0].replace(/\/+$/, "");
+    const text = `${r.title}\n${r.snippet}`.trim();
+    const prev = byId.get(url);
+    if (!prev || text.length > prev.text.length) byId.set(url, { id: url, text });
   }
-  return { prospects, raw: results.length };
+  if (!byId.size) return [];
+  const people = await extractPeople([...byId.values()]);
+  const out: Prospect[] = [];
+  for (const url of byId.keys()) {
+    const e = people.get(url);
+    if (!e) continue;
+    const first = titleCase(e.first_name);
+    const last = titleCase(e.last_name);
+    if (!first || !last || /[\d@©]/.test(`${first}${last}`)) continue;
+    if (!slugMatchesName(url, first, last)) continue;
+    out.push({
+      first_name: first,
+      last_name: last,
+      role: e.role,
+      company: e.company,
+      company_domain: e.company_domain,
+      headcount_est: e.headcount_est,
+      revenue_est: e.revenue_est,
+      location: e.location,
+      linkedin: url,
+    });
+  }
+  return out;
 }
 
-/** Même collecte via le scraping des moteurs publics (repli sans clé d'API). */
-export async function scrapeProspects(
+/**
+ * Entreprise inconnue : tentative d'enrichissement par une re-requête nominative
+ * (« "Prénom Nom" site:linkedin.com/in ») dont on ré-extrait le snippet du bon
+ * profil (apparié par slug). Best-effort, borné à UNE page (mise en cache). Ne
+ * devine jamais : si rien, l'entreprise reste vide.
+ */
+export async function fillMissingCompany(p: Prospect): Promise<void> {
+  if (p.company || !hasExtractor() || !hasSearchApi()) return;
+  const results = await apiSearch(`site:linkedin.com/in "${p.first_name} ${p.last_name}"`, 0);
+  if (!results?.length) return;
+  const key = (u: string) => (u.split("/in/")[1] ?? "").toLowerCase().replace(/\/+$/, "");
+  const target = key(p.linkedin);
+  const match = results.find((r) => key(r.url) === target);
+  if (!match) return;
+  const people = await extractPeople([{ id: p.linkedin, text: `${match.title}\n${match.snippet}`.trim() }]);
+  const e = people.get(p.linkedin);
+  if (e?.company) p.company = e.company;
+  if (e?.company_domain && !p.company_domain) p.company_domain = e.company_domain;
+  if (e?.headcount_est && !p.headcount_est) p.headcount_est = e.headcount_est;
+  if (e?.revenue_est && !p.revenue_est) p.revenue_est = e.revenue_est;
+  if (!p.location && e?.location) p.location = e.location;
+}
+
+/**
+ * Une page de résultats d'une requête via l'API de recherche, interprétée en
+ * personnes (extraction LLM). Renvoie null si aucune API n'est configurée/
+ * disponible. `raw` permet de détecter une requête épuisée (< 10 résultats bruts).
+ */
+export async function fetchProspectsPage(
   query: string,
-  terms: string[],
-  opts: { engines?: number; pages?: number } = {}
-): Promise<Prospect[] | null> {
-  const parse = (html: string) => {
-    const out: Prospect[] = [];
-    for (const [url, anchorTitles] of profileAnchors(html)) {
-      const p = parseProspect(url, anchorTitles, anchorTitles.join(" · "), terms);
-      if (p) out.push(p);
-    }
-    return out;
-  };
-  return scrapeEngines(query, parse, opts);
+  page: number
+): Promise<{ prospects: Prospect[]; raw: number } | null> {
+  const results = await apiSearch(query, page);
+  if (results === null) return null;
+  return { prospects: await extractProspects(results), raw: results.length };
 }

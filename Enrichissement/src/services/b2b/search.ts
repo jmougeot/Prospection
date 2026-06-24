@@ -16,10 +16,10 @@ export interface WebResult {
 
 // Cache persistant des pages API : une page déjà payée ne reconsomme jamais de
 // crédit — relancer la même recherche rejoue le cache (gratuit, instantané) et
-// ne dépense qu'au-delà. TTL court : les profils bougent peu en quelques jours.
-const CACHE_TTL_MS = 7 * 24 * 3600 * 1000;
-db.prepare("DELETE FROM search_cache WHERE fetched_at < ?").run(Date.now() - CACHE_TTL_MS);
-const cacheGet = db.prepare("SELECT results FROM search_cache WHERE query = ? AND page = ? AND fetched_at >= ?");
+// ne dépense qu'au-delà. Aucune expiration automatique : ces résultats sont
+// payés, on ne les supprime jamais tout seuls (purge manuelle uniquement, ex.
+// DELETE FROM search_cache via sqlite si besoin).
+const cacheGet = db.prepare("SELECT results FROM search_cache WHERE query = ? AND page = ?");
 const cachePut = db.prepare("INSERT OR REPLACE INTO search_cache (query, page, results, fetched_at) VALUES (?, ?, ?, ?)");
 
 export function hasSearchApi(): boolean {
@@ -47,7 +47,14 @@ async function serperSearch(query: string, page: number): Promise<WebResult[]> {
     body: JSON.stringify({ q: query, gl: "fr", hl: "fr", num: 10, page: page + 1 }),
     signal: AbortSignal.timeout(TIMEOUT),
   });
-  if (!res.ok) throw new Error(`Serper ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text();
+    // 400 « bad request » dû à UNE requête (nom bizarre) → « aucun résultat » sans
+    // quarantaine. Mais « Not enough credits » (quota épuisé) ou 401/403 = problème
+    // de provider : on remonte l'erreur (surtout PAS mettre du vide en cache).
+    if (res.status === 400 && !/credit/i.test(body)) return [];
+    throw new Error(`Serper ${res.status}: ${body.slice(0, 80)}`);
+  }
   const data = (await res.json()) as { organic?: Array<{ link: string; title: string; snippet?: string }> };
   return (data.organic ?? []).map((i) => ({ url: i.link, title: i.title ?? "", snippet: i.snippet ?? "" }));
 }
@@ -64,8 +71,10 @@ async function braveSearch(query: string, page: number): Promise<WebResult[]> {
 }
 
 // Provider en panne (quota, erreur) mis en quarantaine quelques minutes pour ne
-// pas retenter à chaque prospect et ralentir tout le job.
+// pas retenter à chaque prospect et ralentir tout le job. Un simple 429 (débit
+// trop élevé) est temporaire : quarantaine COURTE pour ne pas tuer un gros lot.
 const PROVIDER_COOLDOWN_MS = 5 * 60 * 1000;
+const RATE_LIMIT_COOLDOWN_MS = 15 * 1000;
 const cooldownUntil = new Map<string, number>();
 
 /**
@@ -82,7 +91,7 @@ export async function apiSearch(query: string, page = 0): Promise<WebResult[] | 
   if (s.braveApiKey) providers.push({ name: "brave", run: () => braveSearch(query, page) });
   if (!providers.length) return null;
 
-  const hit = cacheGet.get(query, page, Date.now() - CACHE_TTL_MS) as { results: string } | undefined;
+  const hit = cacheGet.get(query, page) as { results: string } | undefined;
   if (hit) return JSON.parse(hit.results) as WebResult[];
 
   let lastError: unknown = null;
@@ -94,7 +103,8 @@ export async function apiSearch(query: string, page = 0): Promise<WebResult[] | 
       return results;
     } catch (err) {
       lastError = err;
-      cooldownUntil.set(p.name, Date.now() + PROVIDER_COOLDOWN_MS);
+      const rateLimited = /\b429\b/.test(err instanceof Error ? err.message : String(err));
+      cooldownUntil.set(p.name, Date.now() + (rateLimited ? RATE_LIMIT_COOLDOWN_MS : PROVIDER_COOLDOWN_MS));
     }
   }
   // tous les providers configurés sont en panne/quarantaine

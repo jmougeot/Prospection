@@ -1,0 +1,117 @@
+# Entreprises « trop grosses » (> 1000 salariés au niveau mondial) à retirer de
+# 2000-AE.csv. Une entrée par ligne ; commentaires avec #. La correspondance est
+# insensible à la casse, aux accents et aux emoji, et se fait sur des mots entiers
+# (« Salesforce » attrape « Salesforce ☁️ », « Ex-Salesforce », « Salesforce Tableau »).
+# Édite librement puis relance :  npx tsx scripts/filter-big-companies.ts
+
+# --- Big Tech / éditeurs logiciels mondiaux ---
+Salesforce
+SAP
+Sage
+Microsoft
+Oracle
+Google
+Workday
+ServiceNow
+Adobe
+Cisco
+SAS
+IBM
+Snowflake
+Databricks
+Datadog
+MongoDB
+Elastic
+Cloudflare
+Docker
+Dropbox
+Okta
+Stripe
+Shopify
+Zendesk
+HubSpot
+Qualtrics
+SurveyMonkey
+Medallia
+Genesys
+Sprinklr
+The Trade Desk
+Gartner
+LexisNexis
+OpenText
+Finastra
+Infor
+IFS
+Basware
+Precisely
+Clearwater Analytics
+AVEVA
+Quadient
+Generix
+Conga
+Go1
+SailPoint
+Palo Alto Networks
+Fortinet
+Verkada
+Genetec
+NetApp
+Pure Storage
+HP
+Hewlett Packard Enterprise
+Indeed
+LinkedIn
+
+# --- Plateformes / scale-ups clairement > 1000 ---
+Contentsquare
+Doctolib
+Deel
+Navan
+Lightspeed
+Pluxee
+Meltwater
+Figma
+Revolut
+Uber
+Booking
+PayPal
+FedEx
+
+# --- ESN / IT services & conseil ---
+Capgemini
+Sopra Steria
+Sopra HR
+Thales
+Econocom
+Bouygues
+Acolad
+Cegid
+Siemens
+
+# --- Agences média / pub (réseaux mondiaux) ---
+Publicis
+Havas
+Omnicom
+OMD
+BETC
+Marcel
+WPP
+
+# --- Banque / assurance / finance ---
+Crédit Agricole
+Aon
+Marsh
+Verspieren
+Diot-Siaci
+
+# --- Industrie / luxe / grande conso ---
+Diageo
+Richemont
+Polo Ralph Lauren
+Movado
+Penguin
+INEOS
+Motul
+Andros
+Mane
+La Martiniquaise

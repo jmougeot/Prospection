@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS prospects (
   last_name TEXT NOT NULL,
   role TEXT,                             -- poste affiché sur le profil
   company TEXT,                          -- entreprise lue dans le résultat
+  company_id INTEGER,                    -- lien vers companies.id (rempli en fin de recherche) ; null si non résolue
+  company_domain TEXT,                   -- domaine probable de l'entreprise (modèle, non vérifié)
+  company_headcount_est TEXT,            -- effectif mondial estimé (modèle, indicatif)
+  company_revenue_est TEXT,              -- CA annuel estimé (modèle, indicatif)
   location TEXT,                         -- localisation lue dans le résultat
   linkedin TEXT NOT NULL,                -- URL du profil
   linkedin_key TEXT NOT NULL UNIQUE,     -- slug normalisé (dédoublonnage)
@@ -36,25 +40,14 @@ CREATE TABLE IF NOT EXISTS prospects (
 
 CREATE INDEX IF NOT EXISTS idx_prospects_search ON prospects (search_id);
 
--- Cache de l'enrichissement entreprise (API publique Recherche d'Entreprises) :
--- une boîte rencontrée dans les résultats n'est résolue qu'une fois.
-CREATE TABLE IF NOT EXISTS company_cache (
-  name_key TEXT PRIMARY KEY,             -- nom normalisé (ou « siren:<siren> » pour un cache par SIREN)
-  info TEXT NOT NULL,                    -- JSON CompanyInfo | null
+-- Cache de l'extraction LLM (Haiku) : un même snippet n'est interprété qu'une
+-- fois. Clé = hash du texte d'entrée ; valeur = JSON ExtractedPerson | null
+-- (null mémorisé aussi, pour ne pas re-payer un texte non interprétable).
+CREATE TABLE IF NOT EXISTS extract_cache (
+  text_key TEXT PRIMARY KEY,             -- sha1 du texte (titre + snippet)
+  person TEXT NOT NULL,                  -- JSON ExtractedPerson | null
   fetched_at INTEGER NOT NULL
 );
-
--- Résolveur de noms d'entreprise : index « toute forme de nom → entité ».
-CREATE TABLE IF NOT EXISTS company_alias (
-  alias_norm  TEXT NOT NULL,             -- nom normalisé (clé de résolution)
-  siren       TEXT,                      -- entité canonique
-  effectif    TEXT,                      -- tranche INSEE (null si seed sans attributs)
-  naf_section TEXT,                      -- section NAF (A..U)
-  ca          INTEGER,                   -- dernier CA connu (€)
-  source      TEXT,                      -- wikidata | annuaire | sirene | api
-  UNIQUE (alias_norm, siren)
-);
-CREATE INDEX IF NOT EXISTS idx_company_alias_norm ON company_alias (alias_norm);
 
 -- Cache des pages de résultats de l'API de recherche : une page déjà payée ne
 -- reconsomme jamais de crédit (les profils bougent peu d'un jour à l'autre).
@@ -73,6 +66,28 @@ CREATE TABLE IF NOT EXISTS searches (
   search_id INTEGER NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
 );
+
+-- Base d'entreprises constituée à la main : on donne un nom, il est enrichi une
+-- fois (registre Recherche d'Entreprises + détection du site) puis conservé.
+-- Dédoublonnage par nom normalisé : ré-ajouter une entreprise complète ses infos.
+CREATE TABLE IF NOT EXISTS companies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,                    -- nom saisi
+  name_key TEXT NOT NULL UNIQUE,         -- nom normalisé (clé de dédoublonnage)
+  siren TEXT,                            -- registre français
+  effectif TEXT,                         -- dormant (ancien registre INSEE), conservé tel quel
+  naf_section TEXT,                      -- dormant (ancienne section NAF), conservé tel quel
+  ca INTEGER,                            -- dernier chiffre d'affaires connu (€)
+  domain TEXT,                           -- site web (findDomain)
+  -- Attributs importés de CSV LinkedIn (data/Company-final.csv), complémentaires
+  -- du registre FR : on les conserve tels quels (l'industrie LinkedIn diffère du NAF).
+  location TEXT,                         -- localisation (chaîne complète, ville en tête)
+  headcount INTEGER,                     -- effectif déclaré LinkedIn (nombre)
+  industry TEXT,                         -- secteur LinkedIn (libellé, distinct de naf_section)
+  year_founded INTEGER,                  -- année de création
+  company_type TEXT,                     -- type (Partnership, Privately Held…)
+  added_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
 `);
 
 // Migrations additives sur les bases existantes (no-op si déjà présentes)
@@ -80,6 +95,15 @@ function addColumnIfMissing(table: string, column: string, ddl: string): void {
   const cols = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((c) => c.name);
   if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
 }
+addColumnIfMissing("prospects", "company_id", "company_id INTEGER");
+addColumnIfMissing("prospects", "company_domain", "company_domain TEXT");
+addColumnIfMissing("prospects", "company_headcount_est", "company_headcount_est TEXT");
+addColumnIfMissing("prospects", "company_revenue_est", "company_revenue_est TEXT");
 addColumnIfMissing("prospects", "company_effectif", "company_effectif TEXT");
 addColumnIfMissing("prospects", "company_section", "company_section TEXT");
 addColumnIfMissing("prospects", "company_ca", "company_ca INTEGER");
+addColumnIfMissing("companies", "location", "location TEXT");
+addColumnIfMissing("companies", "headcount", "headcount INTEGER");
+addColumnIfMissing("companies", "industry", "industry TEXT");
+addColumnIfMissing("companies", "year_founded", "year_founded INTEGER");
+addColumnIfMissing("companies", "company_type", "company_type TEXT");

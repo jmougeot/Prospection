@@ -13,16 +13,11 @@ function esc(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 }
 
-/** Corps d'email pour l'aperçu : échappé + *texte* rendu en italique. */
-function fmtBody(s) {
-  return esc(s).replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
-}
-
 function renderNav(active) {
-  const links = [["leads.html", "Prospection"]];
+  const links = [["leads.html", "Prospection"], ["apercu.html", "Aperçu"]];
   document.body.insertAdjacentHTML(
     "afterbegin",
-    `<nav><span class="brand">Enrichissement</span>` +
+    `<nav><a class="brand" href="leads.html"><span class="logo">E</span>Enrichissement</a>` +
       links
         .map(([href, label]) => `<a href="${href}" class="${href === active ? "active" : ""}">${label}</a>`)
         .join("") +
@@ -30,22 +25,10 @@ function renderNav(active) {
   );
 }
 
-const STATUS_LABELS = {
-  pending: "en attente",
-  in_progress: "en cours",
-  replied: "a répondu",
-  opted_out: "désinscrit",
-  bounced: "bounce",
-  completed: "terminé",
-  stopped: "stoppé",
-  failed: "échec",
-  active: "active",
-  paused: "en pause",
-  held: "non lancé",
-};
-
-function pill(status) {
-  return `<span class="pill ${esc(status)}">${esc(STATUS_LABELS[status] || status)}</span>`;
+/** Pastille d'initiales pour un contact (avatar de table). */
+function avatar(first, last) {
+  const i = ((first || "").trim()[0] || "") + ((last || "").trim()[0] || "");
+  return `<span class="avatar">${esc(i || "?")}</span>`;
 }
 
 /** Notification éphémère en bas de l'écran (feedback d'action sans bloquer). */

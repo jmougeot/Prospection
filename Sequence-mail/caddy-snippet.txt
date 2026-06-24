@@ -1,0 +1,20 @@
+# >>> Bloc à AJOUTER au Caddyfile de ruby-caddy (/opt/ruby/docker/Caddyfile).
+# Remplace le hash bcrypt (voir commande dans DEPLOY-SHARED.md).
+go.rubysignal.com {
+	encode gzip
+
+	# Routes PUBLIQUES de suivi : ouvertes (le prospect ne s'authentifie pas)
+	@public path /p/* /t/*
+	handle @public {
+		reverse_proxy sequence-app:3000
+	}
+
+	# Tout le reste (dashboard, /api, /auth) : protégé par mot de passe
+	handle {
+		basic_auth {
+			admin REMPLACE_PAR_LE_HASH_BCRYPT
+		}
+		reverse_proxy sequence-app:3000
+	}
+}
+# <<< fin du bloc
