@@ -1,13 +1,14 @@
 {
   "name": "enrichissement",
   "version": "0.1.0",
-  "description": "Moteur de prospection B2B : recherche de personnes par poste au sein d'entreprises cibles (liste ou registre), via les moteurs de recherche.",
+  "description": "Moteur de prospection B2B : recherche de personnes par poste au sein d'entreprises cibles (liste fournie ou base enrichie), via une API de recherche + extraction LLM.",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "seed:aliases": "tsx scripts/seed-wikidata-aliases.ts",
+    "companies:seed": "tsx scripts/seed-companies.ts",
+    "companies:domains": "tsx scripts/clean-company-domains.ts",
     "desktop:app": "bash scripts/macos-create-launcher.sh"
   },
   "dependencies": {

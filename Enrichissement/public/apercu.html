@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enrichissement — Aperçu</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="page-head">
+    <div>
+      <h1>Aperçu</h1>
+      <p class="sub">
+        Tout ce que vous avez déjà enrichi : les <b>personnes</b> trouvées par les recherches et la
+        <b>base d'entreprises</b>, complétée automatiquement au fil des recherches.
+      </p>
+    </div>
+  </div>
+
+  <div class="tabs" style="margin-bottom:18px">
+    <button id="tabPeople" onclick="showTab('people')">Personnes</button>
+    <button id="tabCompanies" class="ghost" onclick="showTab('companies')">Entreprises</button>
+  </div>
+
+  <!-- Personnes -->
+  <div class="card tablecard" id="peopleCard">
+    <div class="filters">
+      <div class="toolbar">
+        <input id="pRole" placeholder="Poste contient…" style="width:220px" onchange="loadPeople()">
+        <input id="pQ" placeholder="Filtrer (nom, entreprise, ville…)" style="width:240px" onchange="loadPeople()">
+        <span class="count" id="peopleCount"></span>
+        <span style="flex:1"></span>
+        <button class="ghost" onclick="exportPeople()">⬇ Exporter en CSV</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Contact</th><th>Poste</th><th>Entreprise</th><th>Domaine</th><th>Localisation</th><th>LinkedIn</th>
+      </tr></thead>
+      <tbody id="peopleRows"></tbody>
+    </table>
+    <div class="cardbody"><p class="muted" style="margin:0">Affichage limité à 5 000 personnes. L'export reprend la liste filtrée.</p></div>
+  </div>
+
+  <!-- Entreprises -->
+  <div class="card tablecard" id="companiesCard" hidden>
+    <div class="filters">
+      <div class="toolbar">
+        <input id="cQ" placeholder="Filtrer (nom, industry, domaine…)" style="width:240px" onchange="loadCompanies()">
+        <select id="cIndustry" style="width:280px" onchange="loadCompanies()"><option value="">Tous les secteurs</option></select>
+        <span class="count" id="companyCount"></span>
+        <span style="flex:1"></span>
+        <button class="ghost" onclick="exportCompanies()">⬇ Exporter en CSV</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Nom</th><th>Domaine</th><th>Industry</th><th>Headcount</th><th>Localisation</th>
+      </tr></thead>
+      <tbody id="companyRows"></tbody>
+    </table>
+    <div class="cardbody"><p class="muted" style="margin:0">Affichage limité à 5 000 entreprises. L'export reprend la liste filtrée.</p></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>
+renderNav("apercu.html");
+
+let companiesLoaded = false;
+function showTab(tab) {
+  const people = tab === "people";
+  $("#peopleCard").hidden = !people;
+  $("#companiesCard").hidden = people;
+  $("#tabPeople").className = people ? "" : "ghost";
+  $("#tabCompanies").className = people ? "ghost" : "";
+  if (!people && !companiesLoaded) { companiesLoaded = true; loadCompanies(); }
+}
+
+async function init() {
+  const meta = await api("/api/b2b/meta");
+  $("#cIndustry").innerHTML += (meta.industries || [])
+    .map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+  loadPeople();
+  // Arrivée depuis un clic sur l'entreprise d'un prospect : on ouvre l'onglet
+  // Entreprises filtré sur ce nom (apercu.html?tab=companies&q=…).
+  const params = new URLSearchParams(location.search);
+  if (params.get("q")) $("#cQ").value = params.get("q");
+  if (params.get("tab") === "companies") showTab("companies");
+}
+
+// --- Personnes (tous les prospects enrichis) -------------------------------
+let people = [];
+function peopleParams() {
+  const params = new URLSearchParams();
+  if ($("#pRole").value.trim()) params.set("role", $("#pRole").value.trim());
+  if ($("#pQ").value.trim()) params.set("q", $("#pQ").value.trim());
+  return params; // pas de scope → tous les prospects
+}
+
+const estSub = (p) => {
+  const e = [p.company_headcount_est ? `~${esc(p.company_headcount_est)} pers.` : "", p.company_revenue_est ? `~${esc(p.company_revenue_est)}` : ""].filter(Boolean).join(" · ");
+  return e ? `<br><span class="muted" style="font-size:.85em">${e}</span>` : "";
+};
+
+async function loadPeople() {
+  people = await api("/api/b2b/prospects?" + peopleParams());
+  $("#peopleRows").innerHTML = people.map((p) => `<tr>
+      <td><div class="contact">${avatar(p.first_name, p.last_name)}<span class="nm">${esc(p.first_name)} ${esc(p.last_name)}</span></div></td>
+      <td>${esc(p.role || "—")}</td>
+      <td>${p.company ? (p.company_id ? `<a class="lk" href="apercu.html?tab=companies&q=${encodeURIComponent(p.company)}" title="Voir la fiche entreprise">${esc(p.company)}</a>` : esc(p.company)) : "—"}${estSub(p)}</td>
+      <td>${p.company_domain ? `<a class="lk" href="https://${esc(p.company_domain)}" target="_blank" rel="noopener">${esc(p.company_domain)} ↗</a>` : "—"}</td>
+      <td>${esc(p.location || "—")}</td>
+      <td><a class="lk" href="${esc(p.linkedin)}" target="_blank" rel="noopener">Profil ↗</a></td>
+    </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Aucune personne enrichie pour l'instant — lancez une recherche dans Prospection.</div></td></tr>`;
+  $("#peopleCount").textContent = people.length ? `${people.length} personne(s)` : "";
+}
+
+function exportPeople() {
+  if (!people.length) return notify("Rien à exporter.", false);
+  window.location.href = "/api/b2b/prospects.csv?" + peopleParams();
+}
+
+// --- Entreprises -----------------------------------------------------------
+let companies = [];
+function companyParams() {
+  const params = new URLSearchParams();
+  if ($("#cQ").value.trim()) params.set("q", $("#cQ").value.trim());
+  if ($("#cIndustry").value) params.set("industry", $("#cIndustry").value);
+  return params;
+}
+
+async function loadCompanies() {
+  companies = await api("/api/b2b/companies?" + companyParams());
+  const site = (d) => (d ? `<a class="lk" href="https://${esc(d)}" target="_blank" rel="noopener">${esc(d)} ↗</a>` : "—");
+  $("#companyRows").innerHTML = companies.map((c) => `<tr>
+      <td><div class="contact">${avatar(c.name, "")}<span><span class="nm">${esc(c.name)}</span>${c.company_type ? `<div class="cell-sub">${esc(c.company_type)}${c.year_founded ? " · " + c.year_founded : ""}</div>` : ""}</span></div></td>
+      <td>${site(c.domain)}</td>
+      <td>${esc(c.industry || "—")}</td>
+      <td>${c.headcount != null ? c.headcount : "—"}</td>
+      <td>${esc(c.location || "—")}</td>
+    </tr>`).join("") || `<tr><td colspan="5"><div class="empty">Aucune entreprise. Importez le CSV (npm run companies:seed) ou lancez une recherche.</div></td></tr>`;
+  $("#companyCount").textContent = companies.length ? `${companies.length} entreprise(s)` : "";
+}
+
+function exportCompanies() {
+  if (!companies.length) return notify("Rien à exporter.", false);
+  window.location.href = "/api/b2b/companies.csv?" + companyParams();
+}
+
+init();
+</script>
+</body>
+</html>

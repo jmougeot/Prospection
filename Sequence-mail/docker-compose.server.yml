@@ -1,0 +1,28 @@
+# Déploiement sur le CX33 partagé avec la stack "ruby".
+# On NE lance PAS le Caddy bundlé (le ruby-caddy existant détient déjà 80/443).
+# L'app rejoint le réseau "ruby_default" pour que ruby-caddy l'atteigne par son nom.
+#
+#   docker compose -f docker-compose.server.yml up -d --build
+#
+services:
+  app:
+    build: .
+    container_name: sequence-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATA_DIR=/data
+      - PORT=3000
+    volumes:
+      - sequence-data:/data   # base SQLite persistée
+    networks:
+      - ruby_default
+    expose:
+      - "3000"                # joignable seulement par ruby-caddy, pas publié
+
+volumes:
+  sequence-data:
+
+networks:
+  ruby_default:
+    external: true            # réseau créé par la stack ruby existante

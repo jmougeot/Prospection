@@ -7,6 +7,7 @@
  * emails et détecter le pattern d'adressage de la boîte.
  */
 import { resolveMx, resolve4 } from "node:dns/promises";
+import { apiSearch } from "./search.js";
 
 // Particules en minuscules au milieu d'un nom (Neuilly-sur-Seine, Massiet du Biest)
 const PARTICLES = new Set(["de", "du", "des", "le", "la", "les", "et", "en", "au", "aux", "sur", "sous", "lès", "and", "of", "the", "à"]);
@@ -77,7 +78,7 @@ function tokens(name: string): string[] {
     .filter((t) => t && !LEGAL_WORDS.has(t));
 }
 
-export async function fetchPage(url: string): Promise<{ html: string; finalUrl: string } | null> {
+export async function fetchPage(url: string, timeoutMs = 8000): Promise<{ html: string; finalUrl: string } | null> {
   try {
     const res = await fetch(url, {
       headers: {
@@ -85,7 +86,7 @@ export async function fetchPage(url: string): Promise<{ html: string; finalUrl: 
         accept: "text/html,application/xhtml+xml",
         "accept-language": "fr-FR,fr;q=0.9,en;q=0.7",
       },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(timeoutMs),
       redirect: "follow",
     });
     if (!res.ok) return null;
@@ -128,7 +129,11 @@ export interface DomainResult {
 }
 
 /** Devine le domaine à partir du nom/de l'enseigne et le vérifie par le contenu du site. */
-async function guessDomain(names: string[]): Promise<DomainResult | null> {
+export async function guessDomain(
+  names: string[],
+  opts: { tlds?: string[]; timeoutMs?: number } = {}
+): Promise<DomainResult | null> {
+  const tlds = opts.tlds ?? ["fr", "com"];
   const slugs = new Set<string>();
   for (const name of names) {
     const ts = tokens(name);
@@ -140,11 +145,12 @@ async function guessDomain(names: string[]): Promise<DomainResult | null> {
   const candidates: string[] = [];
   for (const slug of slugs) {
     if (slug.length < 3 || slug.length > 40) continue;
-    for (const tld of ["fr", "com"]) candidates.push(`${slug}.${tld}`);
+    for (const tld of tlds) candidates.push(`${slug}.${tld}`);
   }
-  for (const domain of candidates.slice(0, 10)) {
+  for (const domain of candidates.slice(0, Math.max(10, tlds.length * 4))) {
     if (!(await domainExists(domain))) continue;
-    const page = (await fetchPage(`https://${domain}`)) ?? (await fetchPage(`https://www.${domain}`)) ?? (await fetchPage(`http://${domain}`));
+    const t = opts.timeoutMs;
+    const page = (await fetchPage(`https://${domain}`, t)) ?? (await fetchPage(`https://www.${domain}`, t)) ?? (await fetchPage(`http://${domain}`, t));
     if (!page) continue;
     // le site a pu rediriger vers son vrai domaine (ex. acme.fr → groupe-acme.com)
     const finalDomain = hostnameToDomain(new URL(page.finalUrl).hostname);
@@ -154,7 +160,7 @@ async function guessDomain(names: string[]): Promise<DomainResult | null> {
 }
 
 /** Recherche DuckDuckGo (HTML) et renvoie le premier résultat hors annuaires. */
-async function duckduckgoDomain(names: string[], ville: string | null): Promise<DomainResult | null> {
+export async function duckduckgoDomain(names: string[], ville: string | null): Promise<DomainResult | null> {
   const q = `${names[0]} ${ville ?? ""}`.trim();
   const page = await fetchPage(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`);
   if (!page) return null;
@@ -180,6 +186,39 @@ async function duckduckgoDomain(names: string[], ville: string | null): Promise<
     return {
       domain: finalDomain,
       status: pageMatchesName(html, names) ? "verified" : "guessed",
+      homepage: home?.finalUrl ?? `https://${domain}`,
+    };
+  }
+  return null;
+}
+
+/**
+ * Recherche via l'API configurée (Serper/Google) : prend le 1er résultat
+ * organique hors annuaires/réseaux sociaux → son domaine. Bien plus fiable que
+ * le scraping DuckDuckGo. Renvoie null si aucune API ou aucun résultat exploitable.
+ */
+export async function searchDomain(names: string[], ville: string | null): Promise<DomainResult | null> {
+  const q = `${names[0]} ${ville ?? ""}`.trim();
+  const results = await apiSearch(q, 0);
+  if (results === null) throw new Error("search-unavailable"); // provider en cooldown/quota → l'appelant patiente
+  if (!results.length) return null; // recherche OK mais aucun résultat
+
+  for (const r of results.slice(0, 6)) {
+    let host: string;
+    try {
+      host = new URL(r.url).hostname.toLowerCase();
+    } catch {
+      continue;
+    }
+    const domain = hostnameToDomain(host);
+    if (DIRECTORY_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`) || domain === d)) continue;
+    if (host.endsWith(".gouv.fr")) continue;
+    // on confirme via la page d'accueil (existe + suit les redirections vers le vrai domaine)
+    const home = await fetchPage(`https://${domain}`, 4000);
+    const finalDomain = home ? hostnameToDomain(new URL(home.finalUrl).hostname) : domain;
+    return {
+      domain: finalDomain,
+      status: home && pageMatchesName(home.html, names) ? "verified" : "guessed",
       homepage: home?.finalUrl ?? `https://${domain}`,
     };
   }

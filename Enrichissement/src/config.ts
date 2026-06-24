@@ -19,4 +19,12 @@ export const config = {
     serperApiKey: process.env.SERPER_API_KEY ?? "",
     braveApiKey: process.env.BRAVE_SEARCH_API_KEY ?? "",
   },
+  // Extraction des champs prospect (nom, poste, entreprise, lieu) depuis les
+  // résultats de recherche bruts via Claude Haiku. Sans clé, on retombe sur le
+  // parsing heuristique (regex). Haiku 4.5 : ~$1/M entrée, ~$5/M sortie — soit
+  // quelques centimes pour un lot complet (cf. cache d'extraction).
+  anthropic: {
+    apiKey: process.env.ANTHROPIC_API_KEY ?? "",
+    model: process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5",
+  },
 };
