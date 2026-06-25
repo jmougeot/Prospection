@@ -1,5 +1,16 @@
 # Déploiement sur un petit VPS (24/7)
 
+> ⚠️ **La prod actuelle (`go.rubysignal.com`) n'utilise PAS ce guide.** Elle tourne
+> sur le CX33 **partagé** avec la stack `ruby` : l'app rejoint `ruby-caddy` via le
+> réseau `ruby_default`, **sans Caddy bundlé**, et se déploie avec
+> `docker compose -f docker-compose.server.yml up -d --build`. Pour mettre à jour ou
+> redéployer la prod, suis **`DEPLOY-SHARED.md`**, pas ce fichier.
+>
+> Ce guide-ci décrit une installation **autonome** (VPS dédié, Caddy bundlé via
+> `docker-compose.yml`). N'y lance jamais le `docker compose up` nu sur le serveur
+> partagé : il démarrerait un 2e Caddy (conflit port 80) et détacherait l'app de
+> `ruby_default`, coupant le site.
+
 Objectif : faire tourner Sequence Mail en continu sur un VPS, accessible en HTTPS
 sur `go.rubysignal.com`. Le VPS devient la **source unique** : le dashboard, l'envoi
 des séquences ET le suivi (ouvertures, clics, visites `{{link}}`) y tournent en
@@ -44,7 +55,7 @@ curl -fsSL https://get.docker.com | sh
 Depuis ton Mac (sans node_modules ni data) :
 
 ```bash
-rsync -av --exclude node_modules --exclude data --exclude _tmpdata \
+rsync -av --exclude node_modules --exclude data --exclude _tmpdata --exclude .env \
   ~/Desktop/Ruby/prospection/Sequence-mail/ root@<IP_DU_VPS>:/opt/sequence-mail/
 ```
 
@@ -119,9 +130,12 @@ Puis depuis le dashboard, reconnecte tes comptes Google (« + Connecter un compt
 
 ## Mettre à jour l'app plus tard
 
+> Rappel : sur la prod partagée, c'est `DEPLOY-SHARED.md` qu'il faut suivre (compose
+> `docker-compose.server.yml`). Les commandes ci-dessous valent pour l'install **autonome**.
+
 ```bash
-# Mac : renvoyer le code
-rsync -av --exclude node_modules --exclude data --exclude _tmpdata \
+# Mac : renvoyer le code (--exclude .env pour ne PAS écraser le .env de prod)
+rsync -av --exclude node_modules --exclude data --exclude _tmpdata --exclude .env \
   ~/Desktop/Ruby/prospection/Sequence-mail/ root@<IP_DU_VPS>:/opt/sequence-mail/
 # VPS : rebuild
 cd /opt/sequence-mail && docker compose up -d --build
