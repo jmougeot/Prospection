@@ -19,7 +19,7 @@ Vérifier : `dig +short go.rubysignal.com` → IP du CX33.
 
 ```bash
 # depuis le Mac
-rsync -av --exclude node_modules --exclude data --exclude _tmpdata \
+rsync -av --exclude node_modules --exclude data --exclude _tmpdata --exclude .env \
   ~/Desktop/Ruby/prospection/Sequence-mail/ root@<IP>:/opt/sequence-mail/
 ```
 
@@ -101,9 +101,11 @@ docker compose -f docker-compose.server.yml start app
 ## Mises à jour
 
 ```bash
-rsync -av --exclude node_modules --exclude data --exclude _tmpdata \
+# --exclude .env : ne JAMAIS écraser le .env de prod. --remove-orphans : nettoie un
+# éventuel Caddy bundlé lancé par erreur avec le mauvais fichier compose.
+rsync -av --exclude node_modules --exclude data --exclude _tmpdata --exclude .env \
   ~/Desktop/Ruby/prospection/Sequence-mail/ root@<IP>:/opt/sequence-mail/
-ssh root@<IP> 'cd /opt/sequence-mail && docker compose -f docker-compose.server.yml up -d --build'
+ssh root@<IP> 'cd /opt/sequence-mail && docker compose -f docker-compose.server.yml up -d --build --remove-orphans'
 ```
 
 ## Sauvegardes
