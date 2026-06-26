@@ -1,8 +1,18 @@
 #!/bin/zsh
-PROJECT_DIR=/Users/jacquesmougeot/Desktop/prospection/Enrichissement
+# Chemin du projet dérivé à l'exécution depuis l'emplacement de l'app — jamais en
+# dur : tant que Enrichissement.app reste à côté du dossier Enrichissement/, on peut
+# déplacer / renommer / cloner le repo (ou changer d'utilisateur) sans rien recâbler.
+# (.app/Contents/Resources/launch.sh → 4 niveaux au-dessus = le dossier qui contient l'app.)
+PROJECT_REL=Enrichissement
+PROJECT_DIR=${0:A:h:h:h:h}/$PROJECT_REL
 APP_URL=http://localhost:3100
 APP_PORT=3100
-CHROME_APP=/Applications/Google\ Chrome.app
+# Chrome détecté à l'exécution : fenêtre « mode app » si présent, sinon navigateur par défaut.
+if [[ -d "/Applications/Google Chrome.app" ]]; then
+  CHROME_APP="/Applications/Google Chrome.app"
+else
+  CHROME_APP=""
+fi
 cd "$PROJECT_DIR" || exit 1
 
 # 1) S'assurer que le serveur tourne. Test tolérant à une machine chargée :

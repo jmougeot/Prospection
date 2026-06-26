@@ -4,8 +4,11 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="Enrichissement.app"
-DESKTOP_DIR="$HOME/Desktop"
-APP_PATH="$DESKTOP_DIR/$APP_NAME"
+# L'app est posée À CÔTÉ du dossier projet (racine du repo), pas sur le Bureau :
+# c'est ce qui permet à launch.sh de retrouver le projet par chemin relatif (rien
+# en dur) — le repo reste déplaçable / clonable par un autre utilisateur.
+REPO_DIR="$(dirname "$PROJECT_DIR")"
+APP_PATH="$REPO_DIR/$APP_NAME"
 APP_PORT=3100
 APP_URL="http://localhost:${APP_PORT}"
 
@@ -91,13 +94,8 @@ iconutil -c icns "$ICONSET_DIR" -o "$TMP_DIR/Enrichissement.icns"
 # UI dans une fenêtre Chrome « mode app » (sans onglets ni barre d'adresse) :
 # comportement d'application de bureau. Chrome étant scriptable (AppleScript), on
 # peut « focaliser la fenêtre si elle est déjà ouverte, sinon l'ouvrir » — ce que
-# Firefox ne permet pas. Ici on détecte juste Chrome ; le comportement est dans
-# launch.sh.
-if [[ -d "/Applications/Google Chrome.app" ]]; then
-    CHROME_APP="/Applications/Google Chrome.app"
-else
-    CHROME_APP=""   # repli : on ouvrira l'URL avec le navigateur par défaut
-fi
+# Firefox ne permet pas. La détection de Chrome se fait À L'EXÉCUTION dans
+# launch.sh (cf. plus bas), pour que l'app reste portable d'une machine à l'autre.
 
 # L'applet AppleScript reste minimal : il délègue tout à launch.sh, embarqué dans
 # le bundle (testable/débogable seul, sans échappement AppleScript hasardeux).
@@ -116,11 +114,22 @@ osacompile -o "$APP_PATH" "$TMP_DIR/launcher.applescript"
 # Les valeurs du projet sont injectées via %q (sûr) ; le reste n'est pas expansé.
 {
   printf '#!/bin/zsh\n'
-  printf 'PROJECT_DIR=%q\n' "$PROJECT_DIR"
+  # On injecte seulement le NOM du dossier projet (relatif), jamais son chemin
+  # absolu : launch.sh le résout à l'exécution depuis l'emplacement de l'app.
+  printf 'PROJECT_REL=%q\n' "$(basename "$PROJECT_DIR")"
   printf 'APP_URL=%q\n'     "$APP_URL"
   printf 'APP_PORT=%q\n'    "$APP_PORT"
-  printf 'CHROME_APP=%q\n'  "$CHROME_APP"
   cat <<'LAUNCH'
+# Chemin du projet dérivé à l'exécution depuis l'emplacement de l'app : .app/Contents/
+# Resources/launch.sh → 4 niveaux au-dessus = le dossier qui contient l'app ET le
+# projet. Rien en dur → repo déplaçable / clonable / multi-utilisateur.
+PROJECT_DIR=${0:A:h:h:h:h}/$PROJECT_REL
+# Chrome détecté à l'exécution : fenêtre « mode app » si présent, sinon navigateur défaut.
+if [[ -d "/Applications/Google Chrome.app" ]]; then
+  CHROME_APP="/Applications/Google Chrome.app"
+else
+  CHROME_APP=""
+fi
 cd "$PROJECT_DIR" || exit 1
 
 # 1) S'assurer que le serveur tourne. Test tolérant à une machine chargée :
