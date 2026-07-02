@@ -46,13 +46,15 @@ export function registerB2bRoutes(app: express.Express): void {
       return res.status(400).json({ error: "Indiquez au moins un poste recherché (ex. directeur commercial)" });
     }
     const target = Math.min(Math.max(Math.round(Number(b.target)) || 50, 5), 1000);
+    // Zone ciblée : « fr » (défaut, rétro-compat), « us » ou « intl » (mondial).
+    const region: "fr" | "us" | "intl" = b.region === "us" ? "us" : b.region === "intl" ? "intl" : "fr";
     const params = {
       roles,
       companies,
       exclude: splitList(b.exclure),
       location: s("localisation"),
       sector: s("secteur"),
-      franceOnly: b.france === undefined ? true : Boolean(b.france),
+      region,
     };
     // Sélection des entreprises déjà enrichies : effectif LinkedIn + secteur.
     const company: CompanyListFilters = {
@@ -97,11 +99,20 @@ export function registerB2bRoutes(app: express.Express): void {
   function queryProspects(query: Record<string, unknown>): ProspectRow[] {
     const conds: string[] = [];
     const params: unknown[] = [];
-    // Tri « France » par défaut : on enregistre tous les prospects, mais à la
-    // lecture on ne montre que les profils fr.linkedin.com (membres en France).
-    // Passer ?france=0 pour afficher aussi les profils étrangers.
-    if (query.france !== "0" && query.france !== "false") {
+    // Filtre géographique à la lecture : on enregistre TOUS les prospects, mais on
+    // ne montre que ceux de la zone demandée (?region=fr|us|intl, défaut « fr »).
+    //  - fr  : profils fr.linkedin.com (membres en France) ;
+    //  - us  : profils sans sous-domaine pays (www/linkedin.com — les membres US
+    //          n'ont pas de sous-domaine dédié), en écartant les sous-domaines
+    //          pays étrangers (fr., de., uk.…) ;
+    //  - intl: aucun filtre (mondial).
+    // (?region=intl remplace l'ancien ?france=0 ; le sous-domaine reste un signal
+    // bien plus fiable qu'une heuristique de lieu — cf. enrich.ts keepProspects.)
+    const region = query.region === "us" ? "us" : query.region === "intl" ? "intl" : "fr";
+    if (region === "fr") {
       conds.push("linkedin LIKE '%//fr.linkedin.com/%'");
+    } else if (region === "us") {
+      conds.push("(linkedin LIKE '%//www.linkedin.com/%' OR linkedin LIKE '%//linkedin.com/%')");
     }
     if (query.scope === "search") {
       const sid = currentSearchId();
