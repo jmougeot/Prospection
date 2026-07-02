@@ -69,11 +69,16 @@ BlaBlaCar"></textarea>
         <label class="field-label">Mots-clés <span class="muted">— optionnel</span></label>
         <input id="fSecteur" placeholder="ex. SaaS, immobilier…">
       </div>
-      <div style="flex:0 0 auto;padding-bottom:9px">
-        <label class="check"
-          title="Cible les profils fr.linkedin.com et écarte les profils clairement étrangers (sous-domaine pays, lieu hors France)">
-          <input type="checkbox" id="fFrance" checked> France uniquement
+      <div style="flex:0 0 200px">
+        <label class="field-label"
+          title="Oriente le moteur (pays/langue) et le sous-domaine LinkedIn ciblé, puis filtre l'affichage : France = profils fr.linkedin.com ; US = profils www.linkedin.com (biais États-Unis) ; International = aucun filtre pays">
+          Zone géographique
         </label>
+        <select id="fRegion" onchange="loadProspects()">
+          <option value="fr" selected>France</option>
+          <option value="us">États-Unis</option>
+          <option value="intl">International</option>
+        </select>
       </div>
     </div>
 
@@ -285,7 +290,7 @@ async function search(more) {
     exclure: fExclure.value() || undefined,
     localisation: fLoc.value() || undefined,
     secteur: $("#fSecteur").value.trim() || undefined,
-    france: $("#fFrance").checked,
+    region: $("#fRegion").value,
     headcount_min: $("#fHeadMin").value || undefined,
     headcount_max: $("#fHeadMax").value || undefined,
     industry: $("#fIndustry").value || undefined,
@@ -370,6 +375,8 @@ function prospectParams() {
   if ($("#lScope").value === "search") params.set("scope", "search");
   if ($("#lRole").value.trim()) params.set("role", $("#lRole").value.trim());
   if ($("#lQ").value.trim()) params.set("q", $("#lQ").value.trim());
+  // le filtre d'affichage suit la zone sélectionnée (même sémantique que la recherche)
+  params.set("region", $("#fRegion").value);
   return params;
 }
 

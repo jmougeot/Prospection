@@ -4,11 +4,9 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="Enrichissement.app"
-# L'app est posée À CÔTÉ du dossier projet (racine du repo), pas sur le Bureau :
-# c'est ce qui permet à launch.sh de retrouver le projet par chemin relatif (rien
-# en dur) — le repo reste déplaçable / clonable par un autre utilisateur.
-REPO_DIR="$(dirname "$PROJECT_DIR")"
-APP_PATH="$REPO_DIR/$APP_NAME"
+# L'app est posée sur le Bureau pour un accès facile.
+# launch.sh embarque le chemin absolu du projet (injecté à la création).
+APP_PATH="$HOME/Desktop/$APP_NAME"
 APP_PORT=3100
 APP_URL="http://localhost:${APP_PORT}"
 
@@ -114,16 +112,12 @@ osacompile -o "$APP_PATH" "$TMP_DIR/launcher.applescript"
 # Les valeurs du projet sont injectées via %q (sûr) ; le reste n'est pas expansé.
 {
   printf '#!/bin/zsh\n'
-  # On injecte seulement le NOM du dossier projet (relatif), jamais son chemin
-  # absolu : launch.sh le résout à l'exécution depuis l'emplacement de l'app.
-  printf 'PROJECT_REL=%q\n' "$(basename "$PROJECT_DIR")"
+  # Chemin absolu du projet injecté à la création (l'app est sur le Bureau,
+  # loin du repo, donc le calcul relatif ne fonctionne pas).
+  printf 'PROJECT_DIR=%q\n' "$PROJECT_DIR"
   printf 'APP_URL=%q\n'     "$APP_URL"
   printf 'APP_PORT=%q\n'    "$APP_PORT"
   cat <<'LAUNCH'
-# Chemin du projet dérivé à l'exécution depuis l'emplacement de l'app : .app/Contents/
-# Resources/launch.sh → 4 niveaux au-dessus = le dossier qui contient l'app ET le
-# projet. Rien en dur → repo déplaçable / clonable / multi-utilisateur.
-PROJECT_DIR=${0:A:h:h:h:h}/$PROJECT_REL
 # Chrome détecté à l'exécution : fenêtre « mode app » si présent, sinon navigateur défaut.
 if [[ -d "/Applications/Google Chrome.app" ]]; then
   CHROME_APP="/Applications/Google Chrome.app"

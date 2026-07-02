@@ -113,7 +113,7 @@ function searchIdFor(params: PeopleSearchParams, company: CompanyListFilters): n
     (params.exclude ?? []).map(clean).sort().join(","),
     clean(params.location),
     clean(params.sector),
-    params.franceOnly ? "fr" : "",
+    params.region ?? "fr",
     company.headcountMin ?? "",
     company.headcountMax ?? "",
     clean(company.industry),
@@ -352,7 +352,7 @@ export function startProspecting(
         const unit = r.units.shift()!;
         if (r.dead.has(unit.query)) continue;
         state.current = unit.query.replace(/^site:\S+\s+/, ""); // libellé lisible
-        const api = await fetchProspectsPage(unit.query, unit.page);
+        const api = await fetchProspectsPage(unit.query, unit.page, r.params.region ?? "fr");
         if (api === null) {
           // une clé est configurée mais le provider est tombé (quota/débit) : on
           // s'arrête proprement ; « Chercher plus » reprendra la file ensuite.

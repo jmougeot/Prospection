@@ -7,7 +7,7 @@
  * correspondre au nom (anti-bruit) ; le filtrage strict du poste se fait côté job.
  */
 import { deaccent, normName as norm, titleCase } from "./domain.js";
-import { apiSearch, hasSearchApi, type WebResult } from "./search.js";
+import { apiSearch, hasSearchApi, type Region, type WebResult } from "./search.js";
 import { extractPeople, hasExtractor } from "./extract.js";
 
 // URL de profil LinkedIn (sous-domaine pays optionnel). Sans /g : exec() renvoie
@@ -157,7 +157,7 @@ export interface PeopleSearchParams {
   exclude?: string[]; // mots-clés à bannir du titre/de l'entreprise (ex. "senior")
   location?: string; // villes/régions, séparées par des virgules (optionnel)
   sector?: string; // mots-clés libres ajoutés à la requête (optionnel)
-  franceOnly?: boolean; // ajoute le sous-domaine fr.linkedin.com aux requêtes
+  region?: Region; // zone ciblée : biais moteur + sous-domaine LinkedIn (défaut « fr »)
 }
 
 /** Localisations demandées, découpées (« Paris, Lyon » → ["Paris", "Lyon"]). */
@@ -187,9 +187,14 @@ export function isExcluded(text: string | null, exclude: string[]): boolean {
  * requête (déjà étroite) et réappliqués au filtrage.
  */
 export function companyQueries(params: PeopleSearchParams, companyName: string): string[] {
-  const sites = params.franceOnly
-    ? ["site:fr.linkedin.com/in", "site:linkedin.com/in"]
-    : ["site:linkedin.com/in"];
+  // FR : les membres en France ont un profil fr.linkedin.com — on l'attaque en
+  // premier, avec repli sur le domaine générique. US / international : pas de
+  // sous-domaine dédié (les profils US vivent sur www.linkedin.com) → domaine
+  // générique seul, le ciblage venant du biais pays du moteur (gl/hl).
+  const sites =
+    (params.region ?? "fr") === "fr"
+      ? ["site:fr.linkedin.com/in", "site:linkedin.com/in"]
+      : ["site:linkedin.com/in"];
   const terms = allRoleTerms(params.roles).slice(0, 4);
   const block = terms.length > 1 ? `(${terms.map((t) => `"${t}"`).join(" OR ")})` : `"${terms[0] ?? ""}"`;
   const neg = (params.exclude ?? []).map((e) => `-"${e}"`).join(" ");
@@ -267,9 +272,10 @@ export async function fillMissingCompany(p: Prospect): Promise<void> {
  */
 export async function fetchProspectsPage(
   query: string,
-  page: number
+  page: number,
+  region: Region = "fr"
 ): Promise<{ prospects: Prospect[]; raw: number } | null> {
-  const results = await apiSearch(query, page);
+  const results = await apiSearch(query, page, region);
   if (results === null) return null;
   return { prospects: await extractProspects(results), raw: results.length };
 }

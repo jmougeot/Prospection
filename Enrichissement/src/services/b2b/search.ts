@@ -14,6 +14,22 @@ export interface WebResult {
   snippet: string;
 }
 
+/**
+ * Zone géographique ciblée par la recherche : oriente le biais pays/langue du
+ * moteur (gl/hl côté Google/Serper, country/search_lang côté Brave). « intl »
+ * n'impose aucun biais (résultats mondiaux). Le sous-domaine LinkedIn ciblé et
+ * le filtre d'affichage en découlent aussi (cf. linkedin.ts / routes.ts).
+ */
+export type Region = "fr" | "us" | "intl";
+
+// gl/hl (Google/Serper) et country/search_lang (Brave) par région. « intl » →
+// vide = pas de biais (le moteur choisit selon la requête).
+const LOCALES: Record<Region, { gl: string; hl: string; country: string; lang: string }> = {
+  fr: { gl: "fr", hl: "fr", country: "fr", lang: "fr" },
+  us: { gl: "us", hl: "en", country: "us", lang: "en" },
+  intl: { gl: "", hl: "", country: "", lang: "" },
+};
+
 // Cache persistant des pages API : une page déjà payée ne reconsomme jamais de
 // crédit — relancer la même recherche rejoue le cache (gratuit, instantané) et
 // ne dépense qu'au-delà. Aucune expiration automatique : ces résultats sont
@@ -22,6 +38,11 @@ export interface WebResult {
 const cacheGet = db.prepare("SELECT results FROM search_cache WHERE query = ? AND page = ?");
 const cachePut = db.prepare("INSERT OR REPLACE INTO search_cache (query, page, results, fetched_at) VALUES (?, ?, ?, ?)");
 
+// Une même requête donne des résultats différents selon la région (biais gl/hl) :
+// le cache doit donc être cloisonné par région. La région « fr » garde la clé nue
+// (rétro-compat avec le cache déjà payé, 100 % France jusqu'ici).
+const cacheKey = (query: string, region: Region) => (region === "fr" ? query : `${region}${query}`);
+
 export function hasSearchApi(): boolean {
   const s = config.search;
   return Boolean((s.googleApiKey && s.googleCx) || s.serperApiKey || s.braveApiKey);
@@ -29,22 +50,25 @@ export function hasSearchApi(): boolean {
 
 const TIMEOUT = 10000;
 
-async function googleSearch(query: string, page: number): Promise<WebResult[]> {
+async function googleSearch(query: string, page: number, region: Region): Promise<WebResult[]> {
   const { googleApiKey, googleCx } = config.search;
-  const url = `https://www.googleapis.com/customsearch/v1?key=${googleApiKey}&cx=${googleCx}&q=${encodeURIComponent(
-    query
-  )}&num=10&start=${1 + page * 10}&hl=fr&gl=fr`;
+  const { gl, hl } = LOCALES[region];
+  const url =
+    `https://www.googleapis.com/customsearch/v1?key=${googleApiKey}&cx=${googleCx}&q=${encodeURIComponent(query)}&num=10&start=${1 + page * 10}` +
+    (hl ? `&hl=${hl}` : "") +
+    (gl ? `&gl=${gl}` : "");
   const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT) });
   if (!res.ok) throw new Error(`Google CSE ${res.status}`);
   const data = (await res.json()) as { items?: Array<{ link: string; title: string; snippet?: string }> };
   return (data.items ?? []).map((i) => ({ url: i.link, title: i.title ?? "", snippet: i.snippet ?? "" }));
 }
 
-async function serperSearch(query: string, page: number): Promise<WebResult[]> {
+async function serperSearch(query: string, page: number, region: Region): Promise<WebResult[]> {
+  const { gl, hl } = LOCALES[region];
   const res = await fetch("https://google.serper.dev/search", {
     method: "POST",
     headers: { "X-API-KEY": config.search.serperApiKey, "content-type": "application/json" },
-    body: JSON.stringify({ q: query, gl: "fr", hl: "fr", num: 10, page: page + 1 }),
+    body: JSON.stringify({ q: query, num: 10, page: page + 1, ...(gl ? { gl } : {}), ...(hl ? { hl } : {}) }),
     signal: AbortSignal.timeout(TIMEOUT),
   });
   if (!res.ok) {
@@ -59,8 +83,12 @@ async function serperSearch(query: string, page: number): Promise<WebResult[]> {
   return (data.organic ?? []).map((i) => ({ url: i.link, title: i.title ?? "", snippet: i.snippet ?? "" }));
 }
 
-async function braveSearch(query: string, page: number): Promise<WebResult[]> {
-  const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&country=fr&search_lang=fr&count=20&offset=${page}`;
+async function braveSearch(query: string, page: number, region: Region): Promise<WebResult[]> {
+  const { country, lang } = LOCALES[region];
+  const url =
+    `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=20&offset=${page}` +
+    (country ? `&country=${country}` : "") +
+    (lang ? `&search_lang=${lang}` : "");
   const res = await fetch(url, {
     headers: { "X-Subscription-Token": config.search.braveApiKey, accept: "application/json" },
     signal: AbortSignal.timeout(TIMEOUT),
@@ -82,16 +110,18 @@ const cooldownUntil = new Map<string, number>();
  * configuré/disponible (l'appelant bascule alors sur le scraping public).
  * Un tableau vide signifie « provider OK mais aucun résultat ».
  * `page` (0-based) permet de lire au-delà des ~10 premiers résultats.
+ * `region` oriente le biais pays/langue du moteur (défaut « fr »).
  */
-export async function apiSearch(query: string, page = 0): Promise<WebResult[] | null> {
+export async function apiSearch(query: string, page = 0, region: Region = "fr"): Promise<WebResult[] | null> {
   const s = config.search;
   const providers: Array<{ name: string; run: () => Promise<WebResult[]> }> = [];
-  if (s.googleApiKey && s.googleCx) providers.push({ name: "google", run: () => googleSearch(query, page) });
-  if (s.serperApiKey) providers.push({ name: "serper", run: () => serperSearch(query, page) });
-  if (s.braveApiKey) providers.push({ name: "brave", run: () => braveSearch(query, page) });
+  if (s.googleApiKey && s.googleCx) providers.push({ name: "google", run: () => googleSearch(query, page, region) });
+  if (s.serperApiKey) providers.push({ name: "serper", run: () => serperSearch(query, page, region) });
+  if (s.braveApiKey) providers.push({ name: "brave", run: () => braveSearch(query, page, region) });
   if (!providers.length) return null;
 
-  const hit = cacheGet.get(query, page) as { results: string } | undefined;
+  const key = cacheKey(query, region);
+  const hit = cacheGet.get(key, page) as { results: string } | undefined;
   if (hit) return JSON.parse(hit.results) as WebResult[];
 
   let lastError: unknown = null;
@@ -99,7 +129,7 @@ export async function apiSearch(query: string, page = 0): Promise<WebResult[] | 
     if ((cooldownUntil.get(p.name) ?? 0) > Date.now()) continue;
     try {
       const results = await p.run();
-      cachePut.run(query, page, JSON.stringify(results), Date.now());
+      cachePut.run(key, page, JSON.stringify(results), Date.now());
       return results;
     } catch (err) {
       lastError = err;
