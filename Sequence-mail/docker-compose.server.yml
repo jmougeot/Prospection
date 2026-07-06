@@ -20,6 +20,23 @@ services:
     expose:
       - "3000"                # joignable seulement par ruby-caddy, pas publié
 
+  # Serveur MCP en HTTP : expose les tools sequence-mail à l'agent Ruby distant.
+  # Parle à l'app par le réseau interne (pas de Cloudflare/Basic Auth backend).
+  # L'auth de l'endpoint est faite par ruby-caddy (route /mcp de go.rubysignal.com).
+  mcp:
+    build: ./mcp
+    container_name: sequence-mcp
+    restart: unless-stopped
+    environment:
+      - MCP_HTTP_PORT=8790
+      - SEQUENCE_MAIL_BASE_URL=http://sequence-app:3000
+    networks:
+      - ruby_default
+    expose:
+      - "8790"                # joignable seulement par ruby-caddy
+    depends_on:
+      - app
+
 volumes:
   sequence-data:
 
