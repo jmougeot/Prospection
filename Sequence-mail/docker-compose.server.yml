@@ -37,8 +37,31 @@ services:
     depends_on:
       - app
 
+  # Navigateurs serveur des comptes LinkedIn en mode « serveur » (un Chromium par
+  # compte, derrière son proxy). Parle à l'app par le réseau interne avec le
+  # secret LI_RUNNER_SECRET (même .env que l'app). Profils persistés (cookies).
+  li-runner:
+    build:
+      context: .
+      dockerfile: runner/Dockerfile
+    container_name: sequence-li-runner
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - SEQUENCE_URL=http://sequence-app:3000
+      - PROFILES_DIR=/data/profiles
+    volumes:
+      - li-profiles:/data/profiles
+    networks:
+      - ruby_default
+    shm_size: "1gb"           # Chromium a besoin d'un /dev/shm confortable
+    mem_limit: 3g             # plafond : ~5 comptes simultanés sans affamer le VPS
+    depends_on:
+      - app
+
 volumes:
   sequence-data:
+  li-profiles:
 
 networks:
   ruby_default:
