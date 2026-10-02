@@ -30,6 +30,8 @@ services:
     environment:
       - MCP_HTTP_PORT=8790
       - SEQUENCE_MAIL_BASE_URL=http://sequence-app:3000
+      # Adresse publique pour les liens rendus à l'utilisateur (connexion Google, extension)
+      - SEQUENCE_MAIL_PUBLIC_URL=https://go.rubysignal.com
     networks:
       - ruby_default
     expose:
