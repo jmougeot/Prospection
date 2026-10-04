@@ -1,6 +1,6 @@
 # Prospection
 
-Monorepo regroupant les outils de prospection / cold outreach. Deux sous-projets
+Monorepo regroupant les outils de prospection / cold outreach. Trois sous-projets
 indépendants (chacun son `package.json`, sa base SQLite, son app desktop) :
 
 ## `Enrichissement/` — moteur de prospection B2B
@@ -18,7 +18,14 @@ synchro Attio.
 - Port **3000** · `cd Sequence-mail && npm install && npm start`
 - App desktop : `npm run desktop:app`
 
-Les deux peuvent tourner en parallèle (ports distincts). Il n'y a **pas de pont
+## `Offres/` — collecte d'offres d'emploi tech
+Offres **dev, data / ML et devops en France**, lues sur les pages carrières
+publiques des ATS (Greenhouse, Lever, Ashby, SmartRecruiters, Workable).
+Découverte de nouvelles entreprises via Serper, suivi de l'ancienneté et de la
+fermeture des offres, export CSV.
+- Port **3200** · `cd Offres && npm install && npm start`
+
+Les trois peuvent tourner en parallèle (ports distincts). Il n'y a **pas de pont
 automatique** entre eux pour l'instant : l'export de prospects vers une campagne
 se fait par CSV.
 

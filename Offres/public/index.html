@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offres — Collecte</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav><a class="brand" href="/"><span class="logo">O</span>Offres</a></nav>
+<div class="wrap">
+  <div class="page-head">
+    <div>
+      <h1>Offres tech en France</h1>
+      <p class="sub">
+        Collecte des postes <b>dev, data / ML et devops</b> publiés en direct par les entreprises sur leurs pages
+        carrières (Greenhouse, Lever, Ashby, Teamtailor, Workable…), complétée par les job boards des fonds, Welcome to
+        the Jungle et deux agrégateurs. Chaque collecte relit les pages suivies : les nouvelles offres s'ajoutent, celles qui ont
+        disparu sont marquées fermées.
+      </p>
+    </div>
+    <span id="metaBadge"></span>
+  </div>
+
+  <!-- Collecte -->
+  <div class="card">
+    <h2>Collecter</h2>
+    <div class="row" style="align-items:center">
+      <button onclick="collect()" id="collectBtn">Collecter les offres</button>
+      <label class="check" id="discoverWrap"
+        title="Cherche de nouvelles pages carrières via l'API de recherche (requêtes site:…). Seules les pages pas encore en cache consomment des crédits.">
+        <input type="checkbox" id="fDiscover"> Découvrir de nouvelles entreprises
+      </label>
+      <label class="check"
+        title="Lit les job boards d'une trentaine de fonds (nouvelles startups à suivre), Welcome to the Jungle et deux agrégateurs. Gratuit, mais la collecte dure quelques minutes de plus.">
+        <input type="checkbox" id="fExtras" checked> Fonds, Welcome to the Jungle et agrégateurs
+      </label>
+      <label class="check"
+        title="Lit la recherche d'offres publique de LinkedIn, sans compte ni cookie (60 pages au plus, offres des 3 derniers jours). Source non officielle : beaucoup d'ESN et de cabinets, pas de texte d'offre.">
+        <input type="checkbox" id="fLinkedin"> LinkedIn public
+      </label>
+      <label class="check"
+        title="Visite les sites des entreprises tech de la base Enrichissement et de ceux ajoutés à la main, les plus anciennement vus d'abord. L'ATS trouvé est suivi ; sinon la page carrières est lue par des sessions Claude Code (abonnement, sans clé d'API).">
+        <input type="checkbox" id="fSites"> Sites des entreprises
+      </label>
+      <div class="inline" id="sitesWrap" hidden>
+        <input id="fSitesLimit" type="number" value="150" min="1" max="3000" style="width:90px">
+        <span class="muted" id="sitesHint">sites par collecte</span>
+      </div>
+      <div class="inline" id="budgetWrap" hidden>
+        <span class="muted">jusqu'à</span>
+        <input id="fBudget" type="number" value="60" min="1" max="500" style="width:80px">
+        <span class="muted">requêtes de recherche payées</span>
+      </div>
+    </div>
+
+    <details class="adv" style="margin-top:12px">
+      <summary>Ajouter des pages carrières à la main</summary>
+      <div style="margin-top:12px">
+        <textarea id="fRefs" rows="3" placeholder="qonto.com
+https://jobs.lever.co/mistral
+greenhouse:algolia"></textarea>
+        <div class="inline" style="margin-top:8px">
+          <button class="ghost" onclick="addBoards()">Ajouter</button>
+          <span class="muted">une entrée par ligne : site de l'entreprise, URL d'offre ou de page carrières, ou « ats:slug »</span>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <!-- Offres -->
+  <div class="card tablecard">
+    <div class="cardhead">
+      <h2 style="margin:0">Offres</h2>
+      <span class="count" id="count"></span>
+    </div>
+    <div id="jobProgress" hidden style="padding:14px 20px 0">
+      <div class="bar"><div id="jobBar" style="width:0%"></div></div>
+      <div class="inline" style="margin-top:8px">
+        <span class="muted" id="jobLabel"></span>
+        <button class="ghost" id="stopBtn" onclick="stopCollect()" hidden>Arrêter</button>
+      </div>
+    </div>
+    <div class="filters">
+      <div class="toolbar">
+        <select id="lCategory" style="width:160px" onchange="loadJobs()">
+          <option value="">Toutes catégories</option>
+          <option value="dev">Dev</option>
+          <option value="data_ml">Data / ML</option>
+          <option value="devops">Devops</option>
+        </select>
+        <select id="lStatus" style="width:150px" onchange="loadJobs()">
+          <option value="open">En ligne</option>
+          <option value="closed">Fermées</option>
+          <option value="all">Toutes</option>
+        </select>
+        <input id="lQ" placeholder="Filtrer (poste, entreprise, ville…)" style="width:250px" onchange="loadJobs()">
+        <input id="lMinDays" type="number" min="0" placeholder="En ligne depuis ≥ jours" style="width:190px" onchange="loadJobs()">
+        <input id="lMinOpen" type="number" min="0" placeholder="Offres dans la boîte ≥" style="width:180px" onchange="loadJobs()">
+        <label class="check" title="Écarte les annonces des agrégateurs signalées comme cabinet de recrutement ou ESN">
+          <input type="checkbox" id="lHideAgency" onchange="loadJobs()"> Masquer cabinets / ESN
+        </label>
+        <span style="flex:1"></span>
+        <button class="ghost" onclick="exportCsv()">⬇ Exporter en CSV</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th style="width:36px"><input type="checkbox" id="ckAll" onchange="toggleAll(this.checked)"></th>
+        <th>Poste</th><th>Entreprise</th><th>Catégorie</th><th>Localisation</th>
+        <th title="Jours écoulés depuis la publication de l'offre">En ligne</th>
+        <th title="Offres tech France en ligne dans la même entreprise">Offres boîte</th>
+        <th>Offre</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const $ = (s, root) => (root || document).querySelector(s);
+const $$ = (s, root) => [...(root || document).querySelectorAll(s)];
+
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+}
+
+/** Notification éphémère en bas de l'écran (feedback d'action sans bloquer). */
+function notify(msg, ok = true) {
+  const t = document.createElement("div");
+  t.className = "toast" + (ok ? "" : " bad");
+  t.textContent = msg;
+  document.body.appendChild(t);
+  requestAnimationFrame(() => t.classList.add("show"));
+  setTimeout(() => { t.classList.remove("show"); setTimeout(() => t.remove(), 300); }, 4000);
+}
+
+const CATEGORIES = { dev: "Dev", data_ml: "Data / ML", devops: "Devops" };
+let running = false;
+
+async function loadMeta() {
+  const meta = await api("/api/meta");
+  $("#metaBadge").innerHTML =
+    `<span class="pill ${meta.boards ? "replied" : "held"}">${meta.boards} page(s) carrières suivie(s) · ${meta.open_jobs} offre(s) en ligne</span>`;
+  // sans clé de recherche, la découverte est indisponible (la collecte reste possible)
+  $("#fDiscover").disabled = !meta.search_api;
+  if (meta.sites) $("#sitesHint").textContent = `sites par collecte (${meta.sites_seen}/${meta.sites} déjà visités)`;
+  if (!meta.search_api) $("#discoverWrap").title = "Configurez SERPER_API_KEY dans .env pour activer la découverte.";
+  return meta;
+}
+
+async function init() {
+  $("#fDiscover").addEventListener("change", (e) => ($("#budgetWrap").hidden = !e.target.checked));
+  $("#fSites").addEventListener("change", (e) => ($("#sitesWrap").hidden = !e.target.checked));
+  const meta = await loadMeta();
+  // première utilisation : rien à relire, la découverte est le point de départ
+  if (!meta.boards && meta.search_api) { $("#fDiscover").checked = true; $("#budgetWrap").hidden = false; }
+  // un job tournait déjà (page rechargée) : on raccroche le suivi
+  const s = await api("/api/status").catch(() => null);
+  if (s && s.running) trackJob();
+  loadJobs();
+}
+
+async function collect() {
+  $("#collectBtn").disabled = true;
+  try {
+    await api("/api/collect", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ discover: $("#fDiscover").checked, budget: +$("#fBudget").value || 60, extras: $("#fExtras").checked, linkedin: $("#fLinkedin").checked,
+        sites: $("#fSites").checked, sites_limit: +$("#fSitesLimit").value || 150 }),
+    });
+    trackJob();
+  } catch (e) {
+    notify(e.message, false);
+    $("#collectBtn").disabled = false;
+  }
+}
+
+async function stopCollect() {
+  $("#stopBtn").disabled = true;
+  try {
+    await api("/api/stop", { method: "POST" });
+    notify("Arrêt demandé — la collecte s'interrompt.");
+  } catch (e) {
+    notify(e.message, false);
+  }
+}
+
+async function addBoards() {
+  notify("Recherche des pages carrières…");
+  try {
+    const r = await api("/api/boards", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ refs: $("#fRefs").value }),
+    });
+    if (r.added || r.known || r.sites) $("#fRefs").value = r.invalid.join("\n");
+    const parts = [`${r.added} page(s) ajoutée(s)`];
+    if (r.known) parts.push(`${r.known} déjà suivie(s)`);
+    if (r.sites) parts.push(`${r.sites} site(s) sans ATS reconnu, suivi(s) directement (cochez « Sites des entreprises »)`);
+    if (r.invalid.length) parts.push(`${r.invalid.length} non reconnue(s)`);
+    notify(parts.join(" · ") + (r.added ? " — lancez une collecte pour lire leurs offres." : ""), !r.invalid.length);
+    loadMeta();
+  } catch (e) {
+    notify(e.message, false);
+  }
+}
+
+function setRunning(on) {
+  running = on;
+  $("#collectBtn").disabled = on;
+  $("#stopBtn").hidden = !on;
+  $("#stopBtn").disabled = false;
+}
+
+/* Suit le job en cours : barre, libellé, offres affichées au fil de l'eau. */
+function trackJob() {
+  setRunning(true);
+  $("#jobProgress").hidden = false;
+  let lastDone = -1;
+  const poll = setInterval(async () => {
+    const s = await api("/api/status").catch(() => null);
+    if (!s) return;
+    const pct = s.phase === "collect" && s.total ? Math.round((s.done / s.total) * 100) : 0;
+    $("#jobBar").style.width = pct + "%";
+    const PHASES = { discover: "Découverte", portfolio: "Job boards des fonds", sites: "Sites des entreprises", feeds: "Autres sources" };
+    $("#jobLabel").textContent = s.phase === "collect"
+      ? `${s.done}/${s.total} page(s) lue(s) · ${s.open_jobs} offre(s) dont ${s.new_jobs} nouvelle(s)` + (s.current ? ` — ${s.current}` : "")
+      : `${PHASES[s.phase] || "Collecte"} — ${s.new_boards} nouvelle(s) page(s) carrières` + (s.current ? ` · ${s.current}` : "");
+    if (s.done + s.open_jobs !== lastDone) { lastDone = s.done + s.open_jobs; loadJobs(); }
+    if (!s.running) {
+      clearInterval(poll);
+      setRunning(false);
+      setTimeout(() => ($("#jobProgress").hidden = true), 5000);
+      const summary = `${s.done} page(s) lue(s), ${s.open_jobs} offre(s) en ligne dont ${s.new_jobs} nouvelle(s)` +
+        (s.new_boards ? `, ${s.new_boards} page(s) découverte(s)` : "");
+      if (s.errors.length) notify(`Terminé avec ${s.errors.length} erreur(s) : ${s.errors[0]}`, false);
+      else notify(`Collecte terminée : ${summary}.`);
+      loadMeta();
+      loadJobs();
+    }
+  }, 1500);
+}
+
+let jobs = [];
+function jobParams() {
+  const params = new URLSearchParams();
+  params.set("status", $("#lStatus").value);
+  if ($("#lCategory").value) params.set("category", $("#lCategory").value);
+  if ($("#lQ").value.trim()) params.set("q", $("#lQ").value.trim());
+  if (+$("#lMinDays").value > 0) params.set("min_days", $("#lMinDays").value);
+  if (+$("#lMinOpen").value > 0) params.set("min_open", $("#lMinOpen").value);
+  if ($("#lHideAgency").checked) params.set("hide_agency", "1");
+  return params;
+}
+
+async function loadJobs() {
+  jobs = await api("/api/jobs?" + jobParams());
+  const emptyMsg = running
+    ? "Collecte en cours… les offres apparaissent ici au fur et à mesure."
+    : "Aucune offre — lancez une collecte ci-dessus.";
+  $("#rows").innerHTML = jobs.map((j) => `<tr>
+      <td><input type="checkbox" class="ck" value="${j.id}"></td>
+      <td><span class="nm" style="font-weight:600">${esc(j.title)}</span>${j.department ? `<div class="cell-sub">${esc(j.department)}</div>` : ""}</td>
+      <td>${esc(j.company)}${j.agency ? ' <span class="pill held" title="Annonce probablement publiée par un cabinet de recrutement ou une ESN">cabinet / ESN ?</span>' : ""}<div class="cell-sub">via ${esc(j.ats)}</div></td>
+      <td>${esc(CATEGORIES[j.category] || j.category)}</td>
+      <td>${esc(j.location || "—")}${j.remote ? ' <span class="muted">· télétravail</span>' : ""}</td>
+      <td>${j.days_open} j${j.closed_at ? ' <span class="muted">(fermée)</span>' : ""}</td>
+      <td>${j.company_open}</td>
+      <td><a class="lk" href="${esc(j.url)}" target="_blank" rel="noopener">Voir ↗</a></td>
+    </tr>`).join("") || `<tr><td colspan="8"><div class="empty">${emptyMsg}</div></td></tr>`;
+  $("#count").textContent = jobs.length ? `${jobs.length} offre(s)` : "";
+}
+
+function toggleAll(checked) {
+  $$(".ck").forEach((c) => (c.checked = checked));
+}
+
+function exportCsv() {
+  const params = jobParams();
+  const ids = $$(".ck:checked").map((c) => c.value);
+  if (ids.length) params.set("ids", ids.join(","));
+  if (!ids.length && !jobs.length) return notify("Rien à exporter.", false);
+  window.location.href = "/api/jobs.csv?" + params;
+}
+
+init();
+</script>
+</body>
+</html>
