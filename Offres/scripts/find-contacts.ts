@@ -7,8 +7,12 @@
  *     bonne personne parmi les résultats — jamais un nom absent des résultats.
  * Écrit les tables `contact_search` et `contacts`.   npx tsx scripts/find-contacts.ts [nombre max d'entreprises] [--relance]
  *
- * `--relance` : seconde recherche, formulée autrement, pour les entreprises restées sans contact ou avec un
- * contact incertain (une seule fois par entreprise) ; un contact n'y est remplacé que par un meilleur.
+ * `--relance` : nouvelle recherche, formulée autrement, pour les entreprises restées sans contact ou avec un
+ * contact incertain ; un contact n'y est remplacé que par un meilleur. Deux relances au plus par entreprise :
+ * la première cherche l'entreprise comme employeur (« chez X »), la seconde l'autre famille de postes
+ * (les dirigeants chez un employeur direct, les postes techniques dans un cabinet ou une ESN).
+ * `--tri-seul` : refait le choix du contact à partir des résultats déjà en base, sans nouvelle recherche, pour
+ * les entreprises dont la dernière recherche n'a pas été triée (session interrompue).
  * `--natures=produit,autre` : natures d'entreprise visées (`produit` par défaut, voir classify-companies.ts).
  * `--effectif-max=199` : effectif maximal (1000 par défaut).
  */
@@ -20,7 +24,7 @@ import { db } from "../src/db.js";
 db.exec(`
 CREATE TABLE IF NOT EXISTS contact_search (
   company_key TEXT PRIMARY KEY, results TEXT NOT NULL, fetched_at INTEGER NOT NULL,
-  tries INTEGER NOT NULL DEFAULT 1       -- recherches déjà faites (2 = relancée)
+  tries INTEGER NOT NULL DEFAULT 1       -- recherches déjà faites (une par formulation, 3 au plus)
 );
 CREATE TABLE IF NOT EXISTS contacts (
   company_key TEXT PRIMARY KEY,
@@ -35,16 +39,21 @@ if (!(db.prepare("PRAGMA table_info(contact_search)").all() as Array<{ name: str
 
 const args = process.argv.slice(2);
 const retry = args.includes("--relance");
+const sortOnly = args.includes("--tri-seul");
+const keepBetter = retry || sortOnly; // un contact existant n'est remplacé que par un meilleur
 const limit = Number(args.find((a) => /^\d+$/.test(a))) || 1000;
 const option = (name: string): string | undefined => args.find((a) => a.startsWith(`--${name}=`))?.split("=")[1];
 const types = (option("natures") ?? "produit").split(",").filter(Boolean);
 const maxSize = Number(option("effectif-max")) || 1000;
-const pending = retry
-  ? "j.company_key IN (SELECT k.company_key FROM contacts k JOIN contact_search cs USING (company_key) WHERE k.confidence IN ('aucune', 'faible') AND cs.tries < 2)"
+const pending = sortOnly
+  ? "j.company_key IN (SELECT k.company_key FROM contacts k JOIN contact_search cs USING (company_key) WHERE k.confidence IN ('aucune', 'faible') AND cs.fetched_at > k.found_at)"
+  : retry
+  ? "j.company_key IN (SELECT k.company_key FROM contacts k JOIN contact_search cs USING (company_key) WHERE k.confidence IN ('aucune', 'faible') AND cs.tries < 3)"
   : "j.company_key NOT IN (SELECT company_key FROM contacts)";
 const companies = db
   .prepare(
-    `SELECT j.company_key AS id, MAX(j.company) AS nom, s.headcount AS effectif, t.type AS nature, COUNT(*) AS offres
+    `SELECT j.company_key AS id, MAX(j.company) AS nom, s.headcount AS effectif, t.type AS nature, COUNT(*) AS offres,
+            COALESCE((SELECT tries FROM contact_search WHERE company_key = j.company_key), 0) AS tries
      FROM jobs j LEFT JOIN company_sizes s USING (company_key) JOIN company_types t USING (company_key)
      WHERE j.closed_at IS NULL AND t.type IN (${types.map(() => "?").join(", ")}) AND (s.headcount IS NULL OR s.headcount BETWEEN 5 AND ?)
        AND ${pending}
@@ -52,8 +61,8 @@ const companies = db
      ORDER BY SUM(COALESCE(j.posted_at, j.first_seen_at) > (unixepoch() - 30 * 86400) * 1000) > 0 DESC, COUNT(*) DESC
      LIMIT ?`
   )
-  .all(...types, maxSize, limit) as Array<{ id: string; nom: string; effectif: number | null; nature: string; offres: number }>;
-console.log(`${companies.length} entreprise(s) ${retry ? "à relancer" : "sans contact"}`);
+  .all(...types, maxSize, limit) as Array<{ id: string; nom: string; effectif: number | null; nature: string; offres: number; tries: number }>;
+console.log(`${companies.length} entreprise(s) ${sortOnly ? "à trier de nouveau" : retry ? "à relancer" : "sans contact"}`);
 
 interface Result { title: string; snippet: string; url: string }
 const cached = db.prepare("SELECT results FROM contact_search WHERE company_key = ?");
@@ -63,16 +72,22 @@ const cache = db.prepare("INSERT OR REPLACE INTO contact_search (company_key, re
 const STAFFING = new Set(["cabinet_recrutement", "conseil_esn_agence"]);
 const TECH_ROLES = `CTO OR "Chief Technology Officer" OR "VP Engineering" OR "Head of Engineering" OR "directeur technique"`;
 const STAFFING_ROLES = `fondateur OR founder OR CEO OR "directeur général" OR "managing partner" OR "directeur associé" OR "Head of Talent Acquisition" OR "directeur du recrutement" OR "responsable recrutement"`;
+// Dirigeants d'un employeur direct : dans une petite entreprise ils tiennent souvent lieu de décideur technique,
+// et leur titre (« Président », « Fondateur », « Gérant ») échappe aux recherches de postes techniques.
+const LEADER_ROLES = `CEO OR PDG OR président OR "directeur général" OR fondateur OR founder OR gérant OR dirigeant`;
 let paid = 0;
-async function search(c: { id: string; nom: string; nature: string }): Promise<Result[]> {
+async function search(c: { id: string; nom: string; nature: string; tries: number }): Promise<Result[]> {
   const hit = cached.get(c.id) as { results: string } | undefined;
   const known = hit ? (JSON.parse(hit.results) as Result[]) : [];
   if (hit && !retry) return known;
   const staffing = STAFFING.has(c.nature);
-  // relance : l'entreprise comme employeur (« chez X », écarte les homonymes) et les seuls postes techniques
-  const q = retry
-    ? `site:linkedin.com/in ("chez ${c.nom}" OR "at ${c.nom}" OR "@ ${c.nom}") (${staffing ? STAFFING_ROLES : `${TECH_ROLES} OR "Director of Engineering" OR "Engineering Manager" OR "responsable technique"`})`
-    : `site:linkedin.com/in "${c.nom}" (${staffing ? STAFFING_ROLES : `${TECH_ROLES} OR cofondateur OR "co-founder"`})`;
+  const q = !retry
+    ? `site:linkedin.com/in "${c.nom}" (${staffing ? STAFFING_ROLES : `${TECH_ROLES} OR cofondateur OR "co-founder"`})`
+    : c.tries < 2
+      ? // première relance : l'entreprise comme employeur (« chez X », écarte les homonymes) et les seuls postes visés
+        `site:linkedin.com/in ("chez ${c.nom}" OR "at ${c.nom}" OR "@ ${c.nom}") (${staffing ? STAFFING_ROLES : `${TECH_ROLES} OR "Director of Engineering" OR "Engineering Manager" OR "responsable technique"`})`
+      : // seconde relance : l'autre famille de postes
+        `site:linkedin.com/in "${c.nom}" (${staffing ? TECH_ROLES : LEADER_ROLES})`;
   const res = await fetch("https://google.serper.dev/search", {
     method: "POST",
     headers: { "X-API-KEY": config.serperApiKey, "content-type": "application/json" },
@@ -86,7 +101,7 @@ async function search(c: { id: string; nom: string; nature: string }): Promise<R
     .filter((r) => /linkedin\.com\/in\//.test(r.link))
     .map((r) => ({ title: r.title ?? "", snippet: r.snippet ?? "", url: r.link.split("?")[0] }));
   const results = [...known, ...fresh.filter((r) => !known.some((k) => k.url === r.url))];
-  cache.run(c.id, JSON.stringify(results), Date.now(), retry ? 2 : 1);
+  cache.run(c.id, JSON.stringify(results), Date.now(), retry ? c.tries + 1 : 1);
   return results;
 }
 
@@ -110,7 +125,8 @@ const SYSTEM = [
   "d'ingénieurs : le décideur technique. Chaque entrée donne l'entreprise (nom, effectif, nature) et des résultats de",
   "recherche de profils LinkedIn (titre, extrait, URL).",
   "Ordre de préférence : CTO / directeur technique ; VP ou Head of Engineering ; cofondateur technique ; à défaut, dans une",
-  "entreprise de moins de 50 personnes, le CEO / fondateur. Jamais un stagiaire, un commercial, un ancien salarié.",
+  "entreprise de moins de 200 personnes, le CEO / fondateur / dirigeant (confiance « moyenne » au mieux au-delà de 50",
+  "personnes). Jamais un stagiaire, un commercial, un ancien salarié.",
   "Exception — `nature` = cabinet_recrutement ou conseil_esn_agence (cabinet de recrutement, ESN, société de conseil,",
   "agence) : la personne à contacter est celle qui décide du recrutement, pas le décideur technique. Ordre de préférence :",
   "fondateur / CEO / directeur général / associé ; à défaut le directeur ou responsable du recrutement (Head of Talent",
@@ -134,7 +150,17 @@ function run(input: string): Promise<string> {
     let out = "";
     child.stdout.on("data", (c) => (out += c));
     child.on("error", reject);
-    child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(`code ${code} : ${out.slice(0, 200)}`))));
+    child.on("close", (code) => {
+      if (code === 0) return resolve(out);
+      // la session dit pourquoi elle a échoué dans son champ `result`
+      let why = out.slice(0, 200);
+      try {
+        why = String((JSON.parse(out) as { result?: unknown }).result ?? why).slice(0, 300);
+      } catch {
+        // sortie illisible : on garde son début
+      }
+      reject(new Error(`code ${code} : ${why}`));
+    });
     child.stdin.end(input);
   });
 }
@@ -162,6 +188,8 @@ const put = db.prepare(
 );
 const RANK: Record<string, number> = { aucune: 0, faible: 1, moyenne: 2, haute: 3 };
 const current = db.prepare("SELECT confidence FROM contacts WHERE company_key = ?").pluck();
+// contact inchangé : la date du tri est quand même notée, pour ne pas le refaire sur les mêmes résultats
+const sorted = db.prepare("UPDATE contacts SET found_at = ? WHERE company_key = ?");
 let improved = 0;
 const todo = companies.filter((c) => found.has(c.id));
 const BATCH = 40;
@@ -185,8 +213,11 @@ await Promise.all(
             // garde-fou : un profil absent des résultats de recherche n'est jamais retenu
             const ok = k.confiance !== "aucune" && urls.has(k.linkedin);
             done++;
-            if (retry) {
-              if (RANK[ok ? k.confiance : "aucune"] <= RANK[String(current.get(k.id))]) continue;
+            if (keepBetter) {
+              if (RANK[ok ? k.confiance : "aucune"] <= RANK[String(current.get(k.id))]) {
+                sorted.run(Date.now(), k.id);
+                continue;
+              }
               improved++;
             }
             put.run(k.id, ok ? k.prenom : null, ok ? k.nom : null, ok ? k.poste : null, ok ? k.linkedin : null, ok ? k.confiance : "aucune", k.raison, Date.now());
@@ -195,7 +226,7 @@ await Promise.all(
       } catch (err) {
         console.error(`lot en échec : ${err instanceof Error ? err.message : err}`);
       }
-      console.log(`${done}/${todo.length} entreprise(s) traitée(s)` + (retry ? `, ${improved} contact(s) trouvé(s) ou amélioré(s)` : ""));
+      console.log(`${done}/${todo.length} entreprise(s) traitée(s)` + (keepBetter ? `, ${improved} contact(s) trouvé(s) ou amélioré(s)` : ""));
     }
   })
 );
