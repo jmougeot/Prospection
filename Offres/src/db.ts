@@ -82,6 +82,20 @@ CREATE TABLE IF NOT EXISTS search_cache (
   fetched_at INTEGER NOT NULL,
   PRIMARY KEY (query, page)
 );
+
+-- Taille, signalements et nature des entreprises (remplis par les scripts de scripts/)
+CREATE TABLE IF NOT EXISTS company_sizes (company_key TEXT PRIMARY KEY, headcount INTEGER NOT NULL, source TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS company_flags (company_key TEXT PRIMARY KEY, flag TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS company_types (company_key TEXT PRIMARY KEY, type TEXT NOT NULL, reason TEXT);
+
+-- Décideur tech à contacter par entreprise (rempli par scripts/find-contacts.ts)
+CREATE TABLE IF NOT EXISTS contacts (
+  company_key TEXT PRIMARY KEY,
+  first_name TEXT, last_name TEXT, role TEXT, linkedin TEXT,
+  confidence TEXT NOT NULL,              -- haute | moyenne | faible | aucune (personne trouvée)
+  reason TEXT,
+  found_at INTEGER NOT NULL
+);
 `);
 
 // Migrations additives sur les bases existantes (no-op si déjà présentes)

@@ -53,3 +53,22 @@ export function techCategory(title: string, department: string | null): JobCateg
   if (GENERIC_ENGINEER.test(t) && TECH_DEPARTMENT.test(norm(department ?? ""))) return "dev";
   return null;
 }
+
+// Mention de genre d'un intitulé : « H/F », « (F/H/X) », « - h/f/nb », « (m/w/d) », « (H-F) », « H/F*** »…
+// avec le séparateur qui la précède. Sans parenthèses, seuls la barre oblique et « H-F » sont reconnus.
+const GENDER = "(?:nb|mx|[hfmxndw])";
+const GENDER_MARK = new RegExp(
+  `[\\s\\-–—|,:]*(?:[(\\[]\\s*${GENDER}(?:\\s*[/\\-|]\\s*${GENDER}){1,3}\\s*\\**\\s*[)\\]]?` +
+    `|(?<![\\p{L}\\d/])${GENDER}(?:\\s*/\\s*${GENDER}){1,3}(?![\\p{L}\\d/])` +
+    `|(?<![\\p{L}\\d/-])(?:h-f|f-h)(?![\\p{L}\\d/-]))\\**`,
+  "giu"
+);
+
+/** Intitulé sans mention de genre : « Développeur Python (H/F) - Lyon » → « Développeur Python - Lyon ». */
+export function cleanTitle(title: string): string {
+  const cleaned = title
+    .replace(GENDER_MARK, "")
+    .replace(/\s+/g, " ")
+    .replace(/^[\s\-–—|,:]+|[\s\-–—|,:]+$/g, "");
+  return cleaned || title.trim();
+}

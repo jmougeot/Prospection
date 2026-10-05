@@ -2,9 +2,13 @@
  * Routes de la collecte d'offres : lancement / suivi du job, pages carrières
  * suivies, tableau des offres et export CSV.
  */
+import fs from "node:fs";
+import Database from "better-sqlite3";
 import type express from "express";
 import { db } from "./db.js";
 import { addBoardsFromText, jobStatus, startCollect, stopCollect } from "./collect.js";
+import { companyKey } from "./company.js";
+import { config } from "./config.js";
 import { hasSearchApi } from "./discover.js";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -14,6 +18,7 @@ interface JobRow {
   ats: string;
   title: string;
   company: string;
+  company_key: string;
   category: string;
   department: string | null;
   location: string | null;
@@ -24,7 +29,15 @@ interface JobRow {
   closed_at: number | null;
   agency: number; // 1 = annonce probablement publiée par un cabinet ou une ESN
   company_open: number; // offres tech France en ligne dans la même entreprise
+  headcount: number | null; // effectif de l'entreprise (null si inconnu)
   days_open: number; // jours en ligne (jusqu'à la fermeture si l'offre est fermée)
+  // décideur tech de l'entreprise (null si aucun n'a été trouvé ou cherché)
+  contact_first_name: string | null;
+  contact_last_name: string | null;
+  contact_role: string | null;
+  contact_linkedin: string | null;
+  contact_confidence: string | null; // haute | moyenne | faible
+  contact_reason: string | null;
 }
 
 function queryJobs(query: Record<string, unknown>): JobRow[] {
@@ -44,6 +57,14 @@ function queryJobs(query: Record<string, unknown>): JobRow[] {
   }
   // ?hide_agency=1 : écarte les annonces signalées comme cabinet / ESN
   if (query.hide_agency === "1") conds.push("j.agency = 0");
+  // ?min_size= / ?max_size= : effectif de l'entreprise ; une borne écarte les entreprises de taille inconnue
+  for (const [name, op] of [["min_size", ">="], ["max_size", "<="]] as const) {
+    const bound = Number(query[name]);
+    if (query[name] && Number.isFinite(bound) && bound >= 0) {
+      conds.push(`s.headcount ${op} ?`);
+      params.push(bound);
+    }
+  }
   if (query.ids) {
     const ids = String(query.ids).split(",").map(Number).filter(Number.isFinite);
     if (ids.length) {
@@ -56,10 +77,15 @@ function queryJobs(query: Record<string, unknown>): JobRow[] {
   const minOpen = Math.max(0, Number(query.min_open) || 0);
   const rows = db
     .prepare(
-      `SELECT j.id, j.ats, j.title, j.company, j.category, j.department, j.location, j.remote, j.url,
+      `SELECT j.id, j.ats, j.title, j.company, j.company_key, j.category, j.department, j.location, j.remote, j.url,
               j.posted_at, j.first_seen_at, j.closed_at, j.agency,
-              (SELECT COUNT(*) FROM jobs o WHERE o.company_key = j.company_key AND o.closed_at IS NULL) AS company_open
+              (SELECT COUNT(*) FROM jobs o WHERE o.company_key = j.company_key AND o.closed_at IS NULL) AS company_open,
+              s.headcount,
+              c.first_name AS contact_first_name, c.last_name AS contact_last_name, c.role AS contact_role,
+              c.linkedin AS contact_linkedin, c.confidence AS contact_confidence, c.reason AS contact_reason
        FROM jobs j
+       LEFT JOIN contacts c ON c.company_key = j.company_key AND c.confidence <> 'aucune'
+       LEFT JOIN company_sizes s ON s.company_key = j.company_key
        ${conds.length ? "WHERE " + conds.join(" AND ") : ""}
        ORDER BY COALESCE(j.posted_at, j.first_seen_at) DESC
        LIMIT 5000`
@@ -71,6 +97,61 @@ function queryJobs(query: Record<string, unknown>): JobRow[] {
       days_open: Math.max(0, Math.floor(((r.closed_at ?? now) - (r.posted_at ?? r.first_seen_at)) / DAY)),
     }))
     .filter((r) => r.days_open >= minDays && r.company_open >= minOpen);
+}
+
+interface EnrichedCompany {
+  domain: string | null;
+  location: string | null;
+  industry: string | null;
+  year_founded: number | null;
+  siren: string | null;
+  ca: number | null;
+}
+// Fiches de la base Enrichissement (lue seule) par company_key, relues au plus toutes les 10 minutes.
+let enriched: { at: number; byKey: Map<string, EnrichedCompany> } | null = null;
+function enrichedCompany(key: string): EnrichedCompany | null {
+  if (!enriched || Date.now() - enriched.at > 10 * 60 * 1000) {
+    const byKey = new Map<string, EnrichedCompany>();
+    if (fs.existsSync(config.enrichissementDb)) {
+      const source = new Database(config.enrichissementDb, { readonly: true, fileMustExist: true });
+      try {
+        const rows = source.prepare("SELECT name, domain, location, industry, year_founded, siren, ca FROM companies").all() as Array<EnrichedCompany & { name: string }>;
+        for (const { name, ...info } of rows) if (companyKey(name)) byKey.set(companyKey(name), info);
+      } catch {
+        // base d'un autre format : la fiche s'affiche sans ces informations
+      } finally {
+        source.close();
+      }
+    }
+    enriched = { at: Date.now(), byKey };
+  }
+  return enriched.byKey.get(key) ?? null;
+}
+
+/** Tout ce qu'on sait d'une entreprise : taille, nature, contact, site, pages carrières et offres en ligne. */
+function companyCard(key: string) {
+  const jobs = db
+    .prepare(
+      `SELECT id, title, company, category, location, remote, url, ats, agency, COALESCE(posted_at, first_seen_at) AS since
+       FROM jobs WHERE company_key = ? AND closed_at IS NULL ORDER BY since DESC`
+    )
+    .all(key) as Array<{ company: string; since: number; ats: string }>;
+  const last = db.prepare("SELECT company FROM jobs WHERE company_key = ? ORDER BY last_seen_at DESC LIMIT 1").get(key) as { company: string } | undefined;
+  if (!last) return null;
+  const now = Date.now();
+  return {
+    key,
+    name: jobs[0]?.company ?? last.company,
+    closed_jobs: (db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE company_key = ? AND closed_at IS NOT NULL").get(key) as { n: number }).n,
+    size: db.prepare("SELECT headcount, source FROM company_sizes WHERE company_key = ?").get(key) ?? null,
+    type: db.prepare("SELECT type, reason FROM company_types WHERE company_key = ?").get(key) ?? null,
+    flag: (db.prepare("SELECT flag FROM company_flags WHERE company_key = ?").get(key) as { flag: string } | undefined)?.flag ?? null,
+    contact: db.prepare("SELECT first_name, last_name, role, linkedin, confidence, reason FROM contacts WHERE company_key = ?").get(key) ?? null,
+    site: db.prepare("SELECT domain, careers_url FROM sites WHERE company = ? OR domain IN (SELECT slug FROM jobs WHERE company_key = ? AND ats = 'site') LIMIT 1").get(jobs[0]?.company ?? last.company, key) ?? null,
+    enriched: enrichedCompany(key),
+    sources: [...new Set(jobs.map((j) => j.ats))],
+    jobs: jobs.map((j) => ({ ...j, days_open: Math.max(0, Math.floor((now - j.since) / DAY)) })),
+  };
 }
 
 export function registerRoutes(app: express.Express): void {
@@ -128,6 +209,13 @@ export function registerRoutes(app: express.Express): void {
 
   // --- Offres ---
   app.get("/api/jobs", (req, res) => res.json(queryJobs(req.query as Record<string, unknown>)));
+
+  // --- Fiche d'une entreprise (clic sur son nom dans le tableau) ---
+  app.get("/api/company", (req, res) => {
+    const card = companyCard(String(req.query.key ?? ""));
+    if (!card) return res.status(404).json({ error: "Entreprise inconnue" });
+    res.json(card);
+  });
 
   // --- Export CSV (mêmes filtres que /api/jobs, ou ids=1,2,3) ---
   app.get("/api/jobs.csv", (req, res) => {

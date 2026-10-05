@@ -11,71 +11,104 @@
 </head>
 <body>
 <nav><a class="brand" href="/"><span class="logo">O</span>Offres</a></nav>
-<div class="wrap">
-  <div class="page-head">
-    <div>
-      <h1>Offres tech en France</h1>
-      <p class="sub">
-        Collecte des postes <b>dev, data / ML et devops</b> publiés en direct par les entreprises sur leurs pages
-        carrières (Greenhouse, Lever, Ashby, Teamtailor, Workable…), complétée par les job boards des fonds, Welcome to
-        the Jungle et deux agrégateurs. Chaque collecte relit les pages suivies : les nouvelles offres s'ajoutent, celles qui ont
-        disparu sont marquées fermées.
-      </p>
-    </div>
-    <span id="metaBadge"></span>
-  </div>
-
+<div class="layout">
+<aside class="sidebar">
   <!-- Collecte -->
-  <div class="card">
-    <h2>Collecter</h2>
-    <div class="row" style="align-items:center">
-      <button onclick="collect()" id="collectBtn">Collecter les offres</button>
-      <label class="check" id="discoverWrap"
-        title="Cherche de nouvelles pages carrières via l'API de recherche (requêtes site:…). Seules les pages pas encore en cache consomment des crédits.">
-        <input type="checkbox" id="fDiscover"> Découvrir de nouvelles entreprises
-      </label>
-      <label class="check"
-        title="Lit les job boards d'une trentaine de fonds (nouvelles startups à suivre), Welcome to the Jungle et deux agrégateurs. Gratuit, mais la collecte dure quelques minutes de plus.">
-        <input type="checkbox" id="fExtras" checked> Fonds, Welcome to the Jungle et agrégateurs
-      </label>
-      <label class="check"
-        title="Lit la recherche d'offres publique de LinkedIn, sans compte ni cookie (60 pages au plus, offres des 3 derniers jours). Source non officielle : beaucoup d'ESN et de cabinets, pas de texte d'offre.">
-        <input type="checkbox" id="fLinkedin"> LinkedIn public
-      </label>
-      <label class="check"
-        title="Visite les sites des entreprises tech de la base Enrichissement et de ceux ajoutés à la main, les plus anciennement vus d'abord. L'ATS trouvé est suivi ; sinon la page carrières est lue par des sessions Claude Code (abonnement, sans clé d'API).">
-        <input type="checkbox" id="fSites"> Sites des entreprises
-      </label>
-      <div class="inline" id="sitesWrap" hidden>
-        <input id="fSitesLimit" type="number" value="150" min="1" max="3000" style="width:90px">
-        <span class="muted" id="sitesHint">sites par collecte</span>
-      </div>
-      <div class="inline" id="budgetWrap" hidden>
-        <span class="muted">jusqu'à</span>
-        <input id="fBudget" type="number" value="60" min="1" max="500" style="width:80px">
-        <span class="muted">requêtes de recherche payées</span>
-      </div>
+  <section class="side-section">
+    <div class="side-head"><h2>Collecter</h2></div>
+    <button onclick="collect()" id="collectBtn" class="block">Collecter les offres</button>
+    <label class="check" id="discoverWrap"
+      title="Cherche de nouvelles pages carrières via l'API de recherche (requêtes site:…). Seules les pages pas encore en cache consomment des crédits.">
+      <input type="checkbox" id="fDiscover"> Découvrir de nouvelles entreprises
+    </label>
+    <div class="inline sub-opt" id="budgetWrap" hidden>
+      <span class="muted">jusqu'à</span>
+      <input id="fBudget" type="number" value="60" min="1" max="500" style="width:72px">
+      <span class="muted">requêtes payées</span>
+    </div>
+    <label class="check"
+      title="Lit les job boards d'une trentaine de fonds (nouvelles startups à suivre), Welcome to the Jungle et deux agrégateurs. Gratuit, mais la collecte dure quelques minutes de plus.">
+      <input type="checkbox" id="fExtras" checked> Fonds, Welcome to the Jungle et agrégateurs
+    </label>
+    <label class="check"
+      title="Lit la recherche d'offres publique de LinkedIn, sans compte ni cookie (60 pages au plus, offres des 3 derniers jours). Source non officielle : beaucoup d'ESN et de cabinets, pas de texte d'offre.">
+      <input type="checkbox" id="fLinkedin"> LinkedIn public
+    </label>
+    <label class="check"
+      title="Visite les sites des entreprises tech de la base Enrichissement et de ceux ajoutés à la main, les plus anciennement vus d'abord. L'ATS trouvé est suivi ; sinon la page carrières est lue par des sessions Claude Code (abonnement, sans clé d'API).">
+      <input type="checkbox" id="fSites"> Sites des entreprises
+    </label>
+    <div class="inline sub-opt" id="sitesWrap" hidden>
+      <input id="fSitesLimit" type="number" value="150" min="1" max="3000" style="width:72px">
+      <span class="muted" id="sitesHint">sites par collecte</span>
     </div>
 
-    <details class="adv" style="margin-top:12px">
+    <details class="adv">
       <summary>Ajouter des pages carrières à la main</summary>
-      <div style="margin-top:12px">
-        <textarea id="fRefs" rows="3" placeholder="qonto.com
+      <textarea id="fRefs" rows="3" placeholder="qonto.com
 https://jobs.lever.co/mistral
 greenhouse:algolia"></textarea>
-        <div class="inline" style="margin-top:8px">
-          <button class="ghost" onclick="addBoards()">Ajouter</button>
-          <span class="muted">une entrée par ligne : site de l'entreprise, URL d'offre ou de page carrières, ou « ats:slug »</span>
-        </div>
-      </div>
+      <div class="muted">Une entrée par ligne : site de l'entreprise, URL d'offre ou de page carrières, ou « ats:slug ».</div>
+      <button class="ghost block" onclick="addBoards()">Ajouter</button>
     </details>
+  </section>
+
+  <!-- Filtres -->
+  <section class="side-section" id="filters">
+  <div class="side-head">
+    <h2>Filtres</h2>
+    <button class="linkbtn" id="resetBtn" onclick="resetFilters()" hidden>Réinitialiser</button>
+  </div>
+
+  <div class="fgroup">
+    <h3>Offre</h3>
+    <label class="field-label" for="lQ">Recherche</label>
+    <input id="lQ" type="search" placeholder="Poste, entreprise, ville…">
+    <label class="field-label" for="lCategory">Catégorie</label>
+    <select id="lCategory">
+      <option value="">Toutes catégories</option>
+      <option value="dev">Dev</option>
+      <option value="data_ml">Data / ML</option>
+      <option value="devops">Devops</option>
+    </select>
+    <label class="field-label" for="lStatus">Statut</label>
+    <select id="lStatus">
+      <option value="open">En ligne</option>
+      <option value="closed">Fermées</option>
+      <option value="all">Toutes</option>
+    </select>
+    <label class="field-label" for="lMinDays">En ligne depuis au moins</label>
+    <div class="unit"><input id="lMinDays" type="number" min="0" placeholder="0"><span class="muted">jours</span></div>
+  </div>
+
+  <div class="fgroup">
+    <h3>Entreprise</h3>
+    <label class="field-label" for="lMinSize" title="Effectif connu de l'entreprise. Dès qu'une borne est saisie, les entreprises de taille inconnue sont écartées.">Nombre de personnes</label>
+    <div class="range">
+      <input id="lMinSize" type="number" min="0" placeholder="Min">
+      <span class="muted">à</span>
+      <input id="lMaxSize" type="number" min="0" placeholder="Max" aria-label="Nombre de personnes maximum">
+    </div>
+    <label class="field-label" for="lMinOpen">Offres tech en ligne, au moins</label>
+    <div class="unit"><input id="lMinOpen" type="number" min="0" placeholder="0"><span class="muted">offres</span></div>
+    <label class="check" title="Écarte les annonces des agrégateurs signalées comme cabinet de recrutement ou ESN">
+      <input type="checkbox" id="lHideAgency"> Masquer cabinets / ESN
+    </label>
+  </div>
+  </section>
+</aside>
+
+<div class="wrap">
+  <div class="page-head">
+    <h1>Offres tech en France</h1>
+    <span id="metaBadge"></span>
   </div>
 
   <!-- Offres -->
   <div class="card tablecard">
     <div class="cardhead">
-      <h2 style="margin:0">Offres</h2>
-      <span class="count" id="count"></span>
+      <div class="inline"><h2 style="margin:0">Offres</h2><span class="count" id="count"></span></div>
+      <button class="ghost" onclick="exportCsv()">⬇ Exporter en CSV</button>
     </div>
     <div id="jobProgress" hidden style="padding:14px 20px 0">
       <div class="bar"><div id="jobBar" style="width:0%"></div></div>
@@ -84,41 +117,26 @@ greenhouse:algolia"></textarea>
         <button class="ghost" id="stopBtn" onclick="stopCollect()" hidden>Arrêter</button>
       </div>
     </div>
-    <div class="filters">
-      <div class="toolbar">
-        <select id="lCategory" style="width:160px" onchange="loadJobs()">
-          <option value="">Toutes catégories</option>
-          <option value="dev">Dev</option>
-          <option value="data_ml">Data / ML</option>
-          <option value="devops">Devops</option>
-        </select>
-        <select id="lStatus" style="width:150px" onchange="loadJobs()">
-          <option value="open">En ligne</option>
-          <option value="closed">Fermées</option>
-          <option value="all">Toutes</option>
-        </select>
-        <input id="lQ" placeholder="Filtrer (poste, entreprise, ville…)" style="width:250px" onchange="loadJobs()">
-        <input id="lMinDays" type="number" min="0" placeholder="En ligne depuis ≥ jours" style="width:190px" onchange="loadJobs()">
-        <input id="lMinOpen" type="number" min="0" placeholder="Offres dans la boîte ≥" style="width:180px" onchange="loadJobs()">
-        <label class="check" title="Écarte les annonces des agrégateurs signalées comme cabinet de recrutement ou ESN">
-          <input type="checkbox" id="lHideAgency" onchange="loadJobs()"> Masquer cabinets / ESN
-        </label>
-        <span style="flex:1"></span>
-        <button class="ghost" onclick="exportCsv()">⬇ Exporter en CSV</button>
-      </div>
-    </div>
+    <div class="tablescroll">
     <table>
       <thead><tr>
         <th style="width:36px"><input type="checkbox" id="ckAll" onchange="toggleAll(this.checked)"></th>
-        <th>Poste</th><th>Entreprise</th><th>Catégorie</th><th>Localisation</th>
+        <th>Poste</th><th>Entreprise</th>
+        <th title="Décideur tech de l'entreprise (CTO, VP / Head of Engineering, fondateur) trouvé sur LinkedIn">Contact</th>
+        <th>Catégorie</th><th>Localisation</th>
         <th title="Jours écoulés depuis la publication de l'offre">En ligne</th>
         <th title="Offres tech France en ligne dans la même entreprise">Offres boîte</th>
         <th>Offre</th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
+    </div>
   </div>
 </div>
+</div>
+
+<div class="drawer-back" id="coBack" hidden onclick="closeCompany()"></div>
+<aside class="drawer" id="coDrawer" hidden></aside>
 
 <script>
 const $ = (s, root) => (root || document).querySelector(s);
@@ -160,6 +178,9 @@ async function loadMeta() {
 }
 
 async function init() {
+  // tout changement dans le panneau de filtres relance la liste (saisie temporisée)
+  let filterTimer;
+  $("#filters").addEventListener("input", () => { clearTimeout(filterTimer); filterTimer = setTimeout(loadJobs, 250); });
   $("#fDiscover").addEventListener("change", (e) => ($("#budgetWrap").hidden = !e.target.checked));
   $("#fSites").addEventListener("change", (e) => ($("#sitesWrap").hidden = !e.target.checked));
   const meta = await loadMeta();
@@ -259,27 +280,108 @@ function jobParams() {
   if ($("#lQ").value.trim()) params.set("q", $("#lQ").value.trim());
   if (+$("#lMinDays").value > 0) params.set("min_days", $("#lMinDays").value);
   if (+$("#lMinOpen").value > 0) params.set("min_open", $("#lMinOpen").value);
+  if ($("#lMinSize").value !== "" && +$("#lMinSize").value >= 0) params.set("min_size", $("#lMinSize").value);
+  if ($("#lMaxSize").value !== "" && +$("#lMaxSize").value >= 0) params.set("max_size", $("#lMaxSize").value);
   if ($("#lHideAgency").checked) params.set("hide_agency", "1");
   return params;
 }
 
+/** Décideur tech de l'entreprise : nom lié au profil LinkedIn, poste, et alerte si le rattachement est incertain. */
+function contactCell(j) {
+  if (!j.contact_linkedin) return '<span class="muted">—</span>';
+  const name = [j.contact_first_name, j.contact_last_name].filter(Boolean).join(" ") || "Profil LinkedIn";
+  const unsure = j.contact_confidence === "haute" ? "" : ` <span class="pill held" title="${esc(j.contact_reason)}">à vérifier</span>`;
+  return `<a class="lk" href="${esc(j.contact_linkedin)}" target="_blank" rel="noopener" title="${esc(j.contact_reason)}">${esc(name)}</a>${unsure}` +
+    (j.contact_role ? `<div class="cell-sub">${esc(j.contact_role)}</div>` : "");
+}
+
+/** Remet le panneau de filtres dans son état initial (offres en ligne, sans autre critère). */
+function resetFilters() {
+  $$("#filters input, #filters select").forEach((el) => {
+    if (el.type === "checkbox") el.checked = false;
+    else if (el.tagName === "SELECT") el.selectedIndex = 0;
+    else el.value = "";
+  });
+  loadJobs();
+}
+
+let loadSeq = 0;
 async function loadJobs() {
-  jobs = await api("/api/jobs?" + jobParams());
+  const params = jobParams();
+  // « statut » est toujours envoyé : seuls les autres critères comptent comme filtres actifs
+  $("#resetBtn").hidden = [...params.keys()].length === 1 && params.get("status") === "open";
+  const seq = ++loadSeq;
+  const rows = await api("/api/jobs?" + params);
+  if (seq !== loadSeq) return; // une saisie plus récente a déjà relancé la liste
+  jobs = rows;
   const emptyMsg = running
     ? "Collecte en cours… les offres apparaissent ici au fur et à mesure."
     : "Aucune offre — lancez une collecte ci-dessus.";
   $("#rows").innerHTML = jobs.map((j) => `<tr>
       <td><input type="checkbox" class="ck" value="${j.id}"></td>
       <td><span class="nm" style="font-weight:600">${esc(j.title)}</span>${j.department ? `<div class="cell-sub">${esc(j.department)}</div>` : ""}</td>
-      <td>${esc(j.company)}${j.agency ? ' <span class="pill held" title="Annonce probablement publiée par un cabinet de recrutement ou une ESN">cabinet / ESN ?</span>' : ""}<div class="cell-sub">via ${esc(j.ats)}</div></td>
+      <td><button class="co" onclick="openCompany('${esc(j.company_key)}')" title="Voir la fiche de l'entreprise">${esc(j.company)}</button>${j.agency ? ' <span class="pill held" title="Annonce probablement publiée par un cabinet de recrutement ou une ESN">cabinet / ESN ?</span>' : ""}<div class="cell-sub">via ${esc(j.ats)}${j.headcount != null ? ` · ${j.headcount.toLocaleString("fr-FR")} pers.` : ""}</div></td>
+      <td>${contactCell(j)}</td>
       <td>${esc(CATEGORIES[j.category] || j.category)}</td>
       <td>${esc(j.location || "—")}${j.remote ? ' <span class="muted">· télétravail</span>' : ""}</td>
       <td>${j.days_open} j${j.closed_at ? ' <span class="muted">(fermée)</span>' : ""}</td>
       <td>${j.company_open}</td>
       <td><a class="lk" href="${esc(j.url)}" target="_blank" rel="noopener">Voir ↗</a></td>
-    </tr>`).join("") || `<tr><td colspan="8"><div class="empty">${emptyMsg}</div></td></tr>`;
+    </tr>`).join("") || `<tr><td colspan="9"><div class="empty">${emptyMsg}</div></td></tr>`;
   $("#count").textContent = jobs.length ? `${jobs.length} offre(s)` : "";
 }
+
+const COMPANY_TYPES = { produit: "Éditeur / startup produit", conseil_esn_agence: "Conseil, ESN ou agence", cabinet_recrutement: "Cabinet de recrutement", ecole: "École", autre: "Autre" };
+const COMPANY_FLAGS = { ecole: "École", conseil_ou_cabinet: "Conseil ou cabinet", pas_une_entreprise: "Pas une entreprise" };
+const SIZE_SOURCES = { wttj: "Welcome to the Jungle", enrichissement: "LinkedIn", recherche: "recherche web", estimation: "estimation" };
+
+/* Fiche d'une entreprise : ce qu'on sait d'elle, son contact et ses offres en ligne. Les lignes vides sont omises. */
+async function openCompany(key) {
+  let c;
+  try { c = await api("/api/company?key=" + encodeURIComponent(key)); } catch (e) { return notify(e.message, false); }
+  const link = (url, label) => `<a class="lk" href="${esc(url)}" target="_blank" rel="noopener">${esc(label)} ↗</a>`;
+  const rows = (pairs) => pairs.filter(([, v]) => v).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  const e = c.enriched || {};
+  const domain = e.domain || (c.site && c.site.domain);
+  const info = rows([
+    ["Effectif", c.size && `${c.size.headcount} personnes <span class="muted">· ${esc(SIZE_SOURCES[c.size.source] || c.size.source)}</span>`],
+    ["Nature", c.type && esc(COMPANY_TYPES[c.type.type] || c.type.type) + (c.type.reason ? `<div class="cell-sub">${esc(c.type.reason)}</div>` : "")],
+    ["Signalement", c.flag && esc(COMPANY_FLAGS[c.flag] || c.flag)],
+    ["Secteur", esc(e.industry)],
+    ["Création", e.year_founded],
+    ["Localisation", esc(e.location)],
+    ["Chiffre d'affaires", e.ca && Number(e.ca).toLocaleString("fr-FR") + " €"],
+    ["SIREN", esc(e.siren)],
+    ["Site", domain && link("https://" + domain, domain)],
+    ["Page carrières", c.site && c.site.careers_url && link(c.site.careers_url, "Ouvrir")],
+    ["Sources", esc(c.sources.join(", "))],
+  ]);
+  const k = c.contact;
+  const contact = !k ? '<span class="muted">Pas encore cherché.</span>'
+    : !k.linkedin ? `<span class="muted">Aucun décideur tech trouvé.${k.reason ? " " + esc(k.reason) : ""}</span>`
+    : `<dl>${rows([
+        ["Nom", link(k.linkedin, [k.first_name, k.last_name].filter(Boolean).join(" ") || "Profil LinkedIn")],
+        ["Poste", esc(k.role)],
+        ["Confiance", esc(k.confidence) + (k.reason ? `<div class="cell-sub">${esc(k.reason)}</div>` : "")],
+      ])}</dl>`;
+  const jobsHtml = c.jobs.map((j) => `<div class="job">
+      <a class="lk" href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a>
+      <div class="cell-sub">${esc(CATEGORIES[j.category] || j.category)} · ${esc(j.location || "lieu non précisé")}${j.remote ? " · télétravail" : ""} · en ligne depuis ${j.days_open} j</div>
+    </div>`).join("") || '<span class="muted">Aucune offre en ligne.</span>';
+  $("#coDrawer").innerHTML = `
+    <div class="drawer-head"><h2>${esc(c.name)}</h2><button class="ghost" onclick="closeCompany()">Fermer</button></div>
+    <div class="muted">${c.jobs.length} offre(s) tech en ligne${c.closed_jobs ? ` · ${c.closed_jobs} fermée(s)` : ""}</div>
+    <h3>Entreprise</h3>${info ? `<dl>${info}</dl>` : '<span class="muted">Aucune information.</span>'}
+    <h3>Contact</h3>${contact}
+    <h3>Offres en ligne</h3>${jobsHtml}`;
+  $("#coDrawer").hidden = $("#coBack").hidden = false;
+  $("#coDrawer").scrollTop = 0;
+}
+
+function closeCompany() {
+  $("#coDrawer").hidden = $("#coBack").hidden = true;
+}
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCompany(); });
 
 function toggleAll(checked) {
   $$(".ck").forEach((c) => (c.checked = checked));

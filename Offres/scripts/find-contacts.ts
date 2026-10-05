@@ -1,6 +1,6 @@
 /**
  * Cherche un décideur tech (CTO, VP / Head of Engineering, fondateur) dans chaque entreprise cible :
- * éditeurs et startups produit de 5 à 200 personnes ayant des offres tech en ligne.
+ * éditeurs et startups produit de 5 à 1000 personnes (ou d'effectif inconnu) ayant des offres tech en ligne.
  *  1. une recherche web par entreprise (Serper, profils LinkedIn publics), mise en cache ;
  *  2. des sessions Claude Code sans interface (abonnement, sans clé d'API, sans outil) choisissent la
  *     bonne personne parmi les résultats — jamais un nom absent des résultats.
@@ -25,14 +25,14 @@ const limit = Number(process.argv[2]) || 1000;
 const companies = db
   .prepare(
     `SELECT j.company_key AS id, MAX(j.company) AS nom, s.headcount AS effectif, COUNT(*) AS offres
-     FROM jobs j JOIN company_sizes s USING (company_key) JOIN company_types t USING (company_key)
-     WHERE j.closed_at IS NULL AND t.type = 'produit' AND s.headcount BETWEEN 5 AND 200
+     FROM jobs j LEFT JOIN company_sizes s USING (company_key) JOIN company_types t USING (company_key)
+     WHERE j.closed_at IS NULL AND t.type = 'produit' AND (s.headcount IS NULL OR s.headcount BETWEEN 5 AND 1000)
        AND j.company_key NOT IN (SELECT company_key FROM contacts)
      GROUP BY j.company_key
      ORDER BY SUM(COALESCE(j.posted_at, j.first_seen_at) > (unixepoch() - 30 * 86400) * 1000) > 0 DESC, COUNT(*) DESC
      LIMIT ?`
   )
-  .all(limit) as Array<{ id: string; nom: string; effectif: number; offres: number }>;
+  .all(limit) as Array<{ id: string; nom: string; effectif: number | null; offres: number }>;
 console.log(`${companies.length} entreprise(s) sans contact`);
 
 interface Result { title: string; snippet: string; url: string }

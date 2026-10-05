@@ -19,7 +19,7 @@ import { db } from "./db.js";
 import { BoardNotFound, type Posting } from "./ats.js";
 import { type BoardAts, type BoardRef, isBoardAts, parseAnyBoardRef, readBoard } from "./boards.js";
 import { companyKey } from "./company.js";
-import { isInFrance, techCategory } from "./classify.js";
+import { cleanTitle, isInFrance, techCategory } from "./classify.js";
 import { discoverBoards } from "./discover.js";
 import { extractJobs } from "./llm.js";
 import { type SiteRow, addSite, careersText, nextSites, saveSite, seedSites } from "./sites.js";
@@ -229,7 +229,8 @@ async function collectBoard(board: BoardRow): Promise<void> {
   let kept = 0;
   let fresh = 0;
   db.transaction(() => {
-    for (const p of postings) {
+    for (const raw of postings) {
+      const p = { ...raw, title: cleanTitle(raw.title) };
       const category = isInFrance(p.location, p.country) ? techCategory(p.title, p.department) : null;
       if (!category || tooOld(p, now)) continue;
       kept++;
@@ -257,7 +258,8 @@ function storeFeed(feed: Feed, postings: Posting[]): void {
   let kept = 0;
   let fresh = 0;
   db.transaction(() => {
-    for (const p of postings) {
+    for (const raw of postings) {
+      const p = { ...raw, title: cleanTitle(raw.title) };
       const key = p.company ? companyKey(p.company) : "";
       const category = isInFrance(p.location, p.country) ? techCategory(p.title, p.department) : null;
       if (!p.company || !key || !category || tooOld(p, now)) continue;
@@ -291,7 +293,8 @@ function storeSite(site: SiteRow, postings: Posting[]): number {
   let kept = 0;
   let fresh = 0;
   db.transaction(() => {
-    for (const p of postings) {
+    for (const raw of postings) {
+      const p = { ...raw, title: cleanTitle(raw.title) };
       const category = isInFrance(p.location, p.country) ? techCategory(p.title, p.department) : null;
       if (!category || tooOld(p, now) || knownElsewhere.get(key, p.title, "site")) continue;
       kept++;

@@ -1,5 +1,5 @@
 /**
- * Classe les entreprises cibles (5 à 200 personnes, employeurs a priori directs, offres tech en ligne)
+ * Classe les entreprises cibles (5 à 1000 personnes ou effectif inconnu, employeurs a priori directs, offres tech en ligne)
  * par nature : éditeur / startup produit, conseil-ESN-agence, cabinet de recrutement, école, autre.
  * Lecture par des sessions Claude Code sans interface (abonnement, sans clé d'API), sans outil.
  * Écrit la table `company_types`.   npx tsx scripts/classify-companies.ts
@@ -15,12 +15,12 @@ const put = db.prepare("INSERT OR REPLACE INTO company_types (company_key, type,
 const companies = db
   .prepare(
     `SELECT j.company_key AS id, MAX(j.company) AS nom, s.headcount AS effectif, GROUP_CONCAT(DISTINCT j.ats) AS sources
-     FROM jobs j JOIN company_sizes s USING (company_key) LEFT JOIN company_flags f USING (company_key)
-     WHERE j.closed_at IS NULL AND j.agency = 0 AND f.flag IS NULL AND s.headcount BETWEEN 5 AND 200
+     FROM jobs j LEFT JOIN company_sizes s USING (company_key) LEFT JOIN company_flags f USING (company_key)
+     WHERE j.closed_at IS NULL AND j.agency = 0 AND f.flag IS NULL AND (s.headcount IS NULL OR s.headcount BETWEEN 5 AND 1000)
        AND j.company_key NOT IN (SELECT company_key FROM company_types)
      GROUP BY j.company_key`
   )
-  .all() as Array<{ id: string; nom: string; effectif: number; sources: string }>;
+  .all() as Array<{ id: string; nom: string; effectif: number | null; sources: string }>;
 const offers = db.prepare("SELECT title, description FROM jobs WHERE company_key = ? AND closed_at IS NULL ORDER BY LENGTH(COALESCE(description, '')) DESC LIMIT 6");
 
 const TYPES = ["produit", "conseil_esn_agence", "cabinet_recrutement", "ecole", "autre"];
