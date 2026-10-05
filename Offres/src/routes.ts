@@ -25,12 +25,15 @@ interface JobRow {
   remote: number;
   url: string;
   posted_at: number | null;
+  modified_at: number | null;
   first_seen_at: number;
+  since: number; // début de l'ancienneté affichée (voir SINCE)
   closed_at: number | null;
   agency: number; // 1 = annonce probablement publiée par un cabinet ou une ESN
   company_open: number; // offres tech France en ligne dans la même entreprise
   headcount: number | null; // effectif de l'entreprise (null si inconnu)
   days_open: number; // jours en ligne (jusqu'à la fermeture si l'offre est fermée)
+  days_modified: number | null; // jours depuis la dernière modification de la page de l'offre (null : inconnue ou jamais retouchée)
   // décideur tech de l'entreprise (null si aucun n'a été trouvé ou cherché)
   contact_first_name: string | null;
   contact_last_name: string | null;
@@ -39,6 +42,14 @@ interface JobRow {
   contact_confidence: string | null; // haute | moyenne | faible
   contact_reason: string | null;
 }
+
+// Date depuis laquelle une offre est en ligne : sa publication ; à défaut, le plus ancien
+// signe qu'on en a (première collecte, ou dernière modification de sa page si elle est antérieure).
+const SINCE = (t = ""): string => `COALESCE(${t}posted_at, MIN(${t}first_seen_at, COALESCE(${t}modified_at, ${t}first_seen_at)))`;
+
+/** Jours écoulés depuis la dernière modification de la page d'une offre ; null si elle est inconnue ou si la page n'a pas été retouchée depuis. */
+const daysModified = (modified: number | null, since: number, now: number): number | null =>
+  modified !== null && modified - since >= DAY ? Math.max(0, Math.floor((now - modified) / DAY)) : null;
 
 function queryJobs(query: Record<string, unknown>): JobRow[] {
   const conds: string[] = [];
@@ -78,7 +89,7 @@ function queryJobs(query: Record<string, unknown>): JobRow[] {
   const rows = db
     .prepare(
       `SELECT j.id, j.ats, j.title, j.company, j.company_key, j.category, j.department, j.location, j.remote, j.url,
-              j.posted_at, j.first_seen_at, j.closed_at, j.agency,
+              j.posted_at, j.modified_at, j.first_seen_at, ${SINCE("j.")} AS since, j.closed_at, j.agency,
               (SELECT COUNT(*) FROM jobs o WHERE o.company_key = j.company_key AND o.closed_at IS NULL) AS company_open,
               s.headcount,
               c.first_name AS contact_first_name, c.last_name AS contact_last_name, c.role AS contact_role,
@@ -87,14 +98,15 @@ function queryJobs(query: Record<string, unknown>): JobRow[] {
        LEFT JOIN contacts c ON c.company_key = j.company_key AND c.confidence <> 'aucune'
        LEFT JOIN company_sizes s ON s.company_key = j.company_key
        ${conds.length ? "WHERE " + conds.join(" AND ") : ""}
-       ORDER BY COALESCE(j.posted_at, j.first_seen_at) DESC
+       ORDER BY (j.posted_at IS NULL AND j.modified_at IS NULL), since DESC -- offres sans aucune date en fin de liste
        LIMIT 5000`
     )
-    .all(...params) as Array<Omit<JobRow, "days_open">>;
+    .all(...params) as Array<Omit<JobRow, "days_open" | "days_modified">>;
   return rows
     .map((r) => ({
       ...r,
-      days_open: Math.max(0, Math.floor(((r.closed_at ?? now) - (r.posted_at ?? r.first_seen_at)) / DAY)),
+      days_open: Math.max(0, Math.floor(((r.closed_at ?? now) - r.since) / DAY)),
+      days_modified: daysModified(r.modified_at, r.since, now),
     }))
     .filter((r) => r.days_open >= minDays && r.company_open >= minOpen);
 }
@@ -132,10 +144,11 @@ function enrichedCompany(key: string): EnrichedCompany | null {
 function companyCard(key: string) {
   const jobs = db
     .prepare(
-      `SELECT id, title, company, category, location, remote, url, ats, agency, COALESCE(posted_at, first_seen_at) AS since
-       FROM jobs WHERE company_key = ? AND closed_at IS NULL ORDER BY since DESC`
+      `SELECT id, title, company, category, location, remote, url, ats, agency, posted_at, modified_at,
+              ${SINCE()} AS since
+       FROM jobs WHERE company_key = ? AND closed_at IS NULL ORDER BY (posted_at IS NULL AND modified_at IS NULL), since DESC`
     )
-    .all(key) as Array<{ company: string; since: number; ats: string }>;
+    .all(key) as Array<{ company: string; since: number; ats: string; posted_at: number | null; modified_at: number | null }>;
   const last = db.prepare("SELECT company FROM jobs WHERE company_key = ? ORDER BY last_seen_at DESC LIMIT 1").get(key) as { company: string } | undefined;
   if (!last) return null;
   const now = Date.now();
@@ -150,7 +163,11 @@ function companyCard(key: string) {
     site: db.prepare("SELECT domain, careers_url FROM sites WHERE company = ? OR domain IN (SELECT slug FROM jobs WHERE company_key = ? AND ats = 'site') LIMIT 1").get(jobs[0]?.company ?? last.company, key) ?? null,
     enriched: enrichedCompany(key),
     sources: [...new Set(jobs.map((j) => j.ats))],
-    jobs: jobs.map((j) => ({ ...j, days_open: Math.max(0, Math.floor((now - j.since) / DAY)) })),
+    jobs: jobs.map((j) => ({
+      ...j,
+      days_open: Math.max(0, Math.floor((now - j.since) / DAY)),
+      days_modified: daysModified(j.modified_at, j.since, now),
+    })),
   };
 }
 

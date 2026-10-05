@@ -9,7 +9,9 @@
  *  4. lecture de chaque page carrières suivie, tri France + tech, enregistrement ;
  *  5. (optionnel) offres sans page carrières lisible : restes des job boards des
  *     fonds, Welcome to the Jungle, agrégateurs et recherche publique LinkedIn,
- *     dédoublonnés contre ce qui est déjà connu.
+ *     dédoublonnés contre ce qui est déjà connu ;
+ *  6. dates de publication et de modification des offres dont la source ne donne
+ *     pas de date, cherchées sur la page de chaque offre (relue chaque semaine).
  *
  * Une offre déjà connue est mise à jour (last_seen_at) ; une offre absente d'une
  * page relue avec succès est marquée fermée (closed_at). Une page en erreur ne
@@ -25,13 +27,14 @@ import { extractJobs } from "./llm.js";
 import { type SiteRow, addSite, careersText, nextSites, saveSite, seedSites } from "./sites.js";
 import { AGGREGATORS, looksLikeAgency } from "./sources/aggregators.js";
 import { type CareersResult, detectCareers } from "./sources/careers.js";
+import { fetchJobDate } from "./sources/job-date.js";
 import { fetchLinkedinJobs } from "./sources/linkedin.js";
 import { PORTFOLIO_BOARDS, readPortfolioBoard } from "./sources/portfolio-boards.js";
 import { fetchWttjJobs } from "./sources/wttj.js";
 
 export interface JobState {
   running: boolean;
-  phase: "discover" | "portfolio" | "sites" | "collect" | "feeds" | null;
+  phase: "discover" | "portfolio" | "sites" | "collect" | "feeds" | "dates" | null;
   done: number; // pages carrières lues
   total: number; // pages carrières à lire
   new_boards: number; // pages découvertes pendant ce job
@@ -147,10 +150,10 @@ export async function addBoardsFromText(
 const upsertJob = db.prepare(`
   INSERT INTO jobs
     (ats, slug, external_id, title, company, company_key, category, department, location, remote, url, description, posted_at,
-     agency, first_seen_at, last_seen_at)
+     modified_at, agency, first_seen_at, last_seen_at)
   VALUES
     (@ats, @slug, @external_id, @title, @company, @company_key, @category, @department, @location, @remote, @url, @description, @posted_at,
-     @agency, @now, @now)
+     @modified_at, @agency, @now, @now)
   ON CONFLICT (ats, slug, external_id) DO UPDATE SET
     title = excluded.title,
     company = excluded.company,
@@ -162,6 +165,7 @@ const upsertJob = db.prepare(`
     url = excluded.url,
     description = COALESCE(excluded.description, jobs.description),
     posted_at = COALESCE(jobs.posted_at, excluded.posted_at),
+    modified_at = COALESCE(excluded.modified_at, jobs.modified_at),
     agency = excluded.agency,
     last_seen_at = excluded.last_seen_at,
     closed_at = NULL
@@ -191,11 +195,18 @@ const knownElsewhere = db.prepare(
 const FEED_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
 const closeStaleFeed = db.prepare("UPDATE jobs SET closed_at = ? WHERE ats = ? AND closed_at IS NULL AND last_seen_at < ?");
 
-// Les offres publiées il y a plus de 100 jours ne sont pas gardées (à défaut de
-// date de publication, c'est la première collecte où l'offre a été vue qui compte).
+// Les offres dont le dernier signe de vie (publication, ou modification de leur
+// page : l'annonce est encore entretenue) remonte à plus de 100 jours ne sont pas
+// gardées. À défaut de toute date, c'est la première collecte où l'offre a été
+// vue qui compte.
 const MAX_AGE_MS = 100 * 24 * 60 * 60 * 1000;
-const tooOld = (p: Posting, now: number): boolean => p.posted_at !== null && p.posted_at < now - MAX_AGE_MS;
-const purgeOld = db.prepare("DELETE FROM jobs WHERE COALESCE(posted_at, first_seen_at) < ?");
+const tooOld = (p: Posting, now: number): boolean => {
+  const last = Math.max(p.posted_at ?? 0, p.modified_at ?? 0);
+  return last > 0 && last < now - MAX_AGE_MS;
+};
+const purgeOld = db.prepare(
+  "DELETE FROM jobs WHERE MAX(COALESCE(posted_at, modified_at, first_seen_at), COALESCE(modified_at, 0)) < ?"
+);
 
 /** « mistral-ai » → « Mistral Ai » : nom par défaut quand l'ATS ne donne pas le nom de l'entreprise. */
 function nameFromSlug(slug: string): string {
@@ -204,6 +215,20 @@ function nameFromSlug(slug: string): string {
     .filter(Boolean)
     .map((w) => w[0].toUpperCase() + w.slice(1))
     .join(" ");
+}
+
+// Dates déjà trouvées sur la page d'une offre (voir dateJobs).
+const knownDates = db.prepare("SELECT posted_at, modified_at FROM job_dates WHERE url = ?");
+
+/** Offre telle qu'on l'enregistre : intitulé sans mention de genre, dates complétées par celles déjà lues sur sa page. */
+function tidy(raw: Posting): Posting {
+  const known = knownDates.get(raw.url) as { posted_at: number | null; modified_at: number | null } | undefined;
+  return {
+    ...raw,
+    title: cleanTitle(raw.title),
+    posted_at: raw.posted_at ?? known?.posted_at ?? null,
+    modified_at: known?.modified_at ?? null,
+  };
 }
 
 function jobRow(p: Posting, category: string, now: number) {
@@ -217,6 +242,7 @@ function jobRow(p: Posting, category: string, now: number) {
     url: p.url,
     description: p.description,
     posted_at: p.posted_at,
+    modified_at: p.modified_at ?? null,
     now,
   };
 }
@@ -230,7 +256,7 @@ async function collectBoard(board: BoardRow): Promise<void> {
   let fresh = 0;
   db.transaction(() => {
     for (const raw of postings) {
-      const p = { ...raw, title: cleanTitle(raw.title) };
+      const p = tidy(raw);
       const category = isInFrance(p.location, p.country) ? techCategory(p.title, p.department) : null;
       if (!category || tooOld(p, now)) continue;
       kept++;
@@ -259,7 +285,7 @@ function storeFeed(feed: Feed, postings: Posting[]): void {
   let fresh = 0;
   db.transaction(() => {
     for (const raw of postings) {
-      const p = { ...raw, title: cleanTitle(raw.title) };
+      const p = tidy(raw);
       const key = p.company ? companyKey(p.company) : "";
       const category = isInFrance(p.location, p.country) ? techCategory(p.title, p.department) : null;
       if (!p.company || !key || !category || tooOld(p, now)) continue;
@@ -294,7 +320,7 @@ function storeSite(site: SiteRow, postings: Posting[]): number {
   let fresh = 0;
   db.transaction(() => {
     for (const raw of postings) {
-      const p = { ...raw, title: cleanTitle(raw.title) };
+      const p = tidy(raw);
       const category = isInFrance(p.location, p.country) ? techCategory(p.title, p.department) : null;
       if (!category || tooOld(p, now) || knownElsewhere.get(key, p.title, "site")) continue;
       kept++;
@@ -404,6 +430,52 @@ async function checkSiteChunk(sites: SiteRow[], offset: number, total: number): 
   });
 }
 
+// ───────────────────────────── Dates de publication ─────────────────────────────
+
+// Pages d'offre à lire : offres en ligne sans date dont la page ne l'a jamais été,
+// et pages déjà lues il y a plus d'une semaine (leur date de modification a pu
+// changer). `shared` : page commune à plusieurs offres (page carrières, liste).
+const DATE_REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
+const pagesToDate = db.prepare(
+  `SELECT j.url, MIN(j.title) AS title, (COUNT(*) > 1 OR MAX(j.url IS s.careers_url)) AS shared
+   FROM jobs j
+   LEFT JOIN sites s ON j.ats = 'site' AND s.domain = j.slug
+   LEFT JOIN job_dates d ON d.url = j.url
+   WHERE j.closed_at IS NULL
+     AND ((d.url IS NULL AND j.posted_at IS NULL) OR d.checked_at < ?)
+   GROUP BY j.url`
+);
+// La date de publication ne change plus une fois trouvée ; la date de modification suit la page.
+const saveJobDates = db.prepare(
+  `INSERT INTO job_dates (url, posted_at, modified_at, checked_at) VALUES (@url, @posted_at, @modified_at, @now)
+   ON CONFLICT (url) DO UPDATE SET
+     posted_at = COALESCE(job_dates.posted_at, excluded.posted_at),
+     modified_at = COALESCE(excluded.modified_at, job_dates.modified_at),
+     checked_at = excluded.checked_at`
+);
+const setJobDates = db.prepare(
+  "UPDATE jobs SET posted_at = COALESCE(posted_at, @posted_at), modified_at = COALESCE(@modified_at, modified_at) WHERE url = @url"
+);
+const DATE_CONCURRENCY = 4;
+
+/**
+ * Lit sur la page de chaque offre concernée ses dates de publication et de
+ * modification. Une page illisible (panne, anti-robot) est relue à la collecte
+ * suivante.
+ */
+export async function dateJobs(): Promise<void> {
+  const jobs = pagesToDate.all(Date.now() - DATE_REFRESH_MS) as Array<{ url: string; title: string; shared: number }>;
+  let done = 0;
+  await pool(jobs, DATE_CONCURRENCY, async (job) => {
+    state.current = `offre ${++done}/${jobs.length}`;
+    const r = await fetchJobDate(job.url, job.shared ? null : job.title);
+    if (!r.read) return;
+    const dates = { url: job.url, posted_at: r.posted_at, modified_at: r.modified_at };
+    saveJobDates.run({ ...dates, now: Date.now() });
+    setJobDates.run(dates);
+  });
+}
+
 // ───────────────────────────── Job boards des fonds ─────────────────────────────
 
 const PORTFOLIO_MAX_REQUESTS = 25; // par job board
@@ -476,6 +548,9 @@ export interface CollectOptions {
 }
 
 async function run({ discover, budget, extras, linkedin, sites }: CollectOptions): Promise<void> {
+  // les pages d'offre déjà connues d'abord : le tri par ancienneté juge sur des dates de modification à jour
+  state.phase = "dates";
+  await dateJobs();
   purgeOld.run(Date.now() - MAX_AGE_MS);
   if (discover) {
     state.phase = "discover";
@@ -548,6 +623,11 @@ async function run({ discover, budget, extras, linkedin, sites }: CollectOptions
   if (linkedin && !stopRequested) {
     state.phase = "feeds";
     storeFeed("linkedin", await readUnofficial("LinkedIn (recherche publique)", () => fetchLinkedinJobs({ maxRequests: LINKEDIN_MAX_REQUESTS, hours: 72 })));
+  }
+
+  if (!stopRequested) {
+    state.phase = "dates";
+    await dateJobs();
   }
 }
 

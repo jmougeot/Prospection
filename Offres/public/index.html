@@ -124,7 +124,7 @@ greenhouse:algolia"></textarea>
         <th>Poste</th><th>Entreprise</th>
         <th title="Décideur tech de l'entreprise (CTO, VP / Head of Engineering, fondateur) trouvé sur LinkedIn">Contact</th>
         <th>Catégorie</th><th>Localisation</th>
-        <th title="Jours écoulés depuis la publication de l'offre">En ligne</th>
+        <th title="Jours écoulés depuis la publication de l'offre ; en dessous, dernière modification de sa page quand elle a été retouchée depuis">En ligne</th>
         <th title="Offres tech France en ligne dans la même entreprise">Offres boîte</th>
         <th>Offre</th>
       </tr></thead>
@@ -253,7 +253,7 @@ function trackJob() {
     if (!s) return;
     const pct = s.phase === "collect" && s.total ? Math.round((s.done / s.total) * 100) : 0;
     $("#jobBar").style.width = pct + "%";
-    const PHASES = { discover: "Découverte", portfolio: "Job boards des fonds", sites: "Sites des entreprises", feeds: "Autres sources" };
+    const PHASES = { discover: "Découverte", portfolio: "Job boards des fonds", sites: "Sites des entreprises", feeds: "Autres sources", dates: "Dates de publication" };
     $("#jobLabel").textContent = s.phase === "collect"
       ? `${s.done}/${s.total} page(s) lue(s) · ${s.open_jobs} offre(s) dont ${s.new_jobs} nouvelle(s)` + (s.current ? ` — ${s.current}` : "")
       : `${PHASES[s.phase] || "Collecte"} — ${s.new_boards} nouvelle(s) page(s) carrières` + (s.current ? ` · ${s.current}` : "");
@@ -305,6 +305,13 @@ function resetFilters() {
   loadJobs();
 }
 
+/** Ancienneté d'une offre : exacte si sa date de publication est connue, minimale si seule une modification de sa page l'est. */
+function ageLabel(j) {
+  if (j.posted_at != null) return `${j.days_open} j`;
+  if (j.modified_at != null) return `<span title="Date de publication inconnue : la page de l'offre n'a pas été modifiée depuis ${j.days_open} j">${j.days_open} j+</span>`;
+  return `<span class="muted" title="La page de l'offre ne donne aucune date. Offre vue pour la première fois il y a ${j.days_open} j.">date inconnue</span>`;
+}
+
 let loadSeq = 0;
 async function loadJobs() {
   const params = jobParams();
@@ -324,7 +331,7 @@ async function loadJobs() {
       <td>${contactCell(j)}</td>
       <td>${esc(CATEGORIES[j.category] || j.category)}</td>
       <td>${esc(j.location || "—")}${j.remote ? ' <span class="muted">· télétravail</span>' : ""}</td>
-      <td>${j.days_open} j${j.closed_at ? ' <span class="muted">(fermée)</span>' : ""}</td>
+      <td>${ageLabel(j)}${j.closed_at ? ' <span class="muted">(fermée)</span>' : ""}${j.days_modified != null ? `<div class="cell-sub">modifiée il y a ${j.days_modified} j</div>` : ""}</td>
       <td>${j.company_open}</td>
       <td><a class="lk" href="${esc(j.url)}" target="_blank" rel="noopener">Voir ↗</a></td>
     </tr>`).join("") || `<tr><td colspan="9"><div class="empty">${emptyMsg}</div></td></tr>`;
@@ -366,7 +373,7 @@ async function openCompany(key) {
       ])}</dl>`;
   const jobsHtml = c.jobs.map((j) => `<div class="job">
       <a class="lk" href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a>
-      <div class="cell-sub">${esc(CATEGORIES[j.category] || j.category)} · ${esc(j.location || "lieu non précisé")}${j.remote ? " · télétravail" : ""} · en ligne depuis ${j.days_open} j</div>
+      <div class="cell-sub">${esc(CATEGORIES[j.category] || j.category)} · ${esc(j.location || "lieu non précisé")}${j.remote ? " · télétravail" : ""} · en ligne depuis : ${ageLabel(j)}${j.days_modified != null ? ` · modifiée il y a ${j.days_modified} j` : ""}</div>
     </div>`).join("") || '<span class="muted">Aucune offre en ligne.</span>';
   $("#coDrawer").innerHTML = `
     <div class="drawer-head"><h2>${esc(c.name)}</h2><button class="ghost" onclick="closeCompany()">Fermer</button></div>

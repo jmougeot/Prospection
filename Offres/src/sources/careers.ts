@@ -140,7 +140,7 @@ function decodeEntities(s: string): string {
 }
 
 /** HTML (éventuellement échappé en entités) → texte brut tronqué. Même logique que dans ats.ts. */
-function htmlToText(html: string | null | undefined, max = DESCRIPTION_MAX): string | null {
+export function htmlToText(html: string | null | undefined, max = DESCRIPTION_MAX): string | null {
   if (!html) return null;
   const raw = /<[a-z]/i.test(html) ? html : decodeEntities(html);
   const text = decodeEntities(

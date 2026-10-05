@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   remote INTEGER NOT NULL DEFAULT 0,
   url TEXT NOT NULL,
   description TEXT,                      -- texte brut tronqué (null si l'ATS ne le donne pas en liste)
-  posted_at INTEGER,                     -- date de publication annoncée par l'ATS
+  posted_at INTEGER,                     -- date de publication annoncée par la source, sinon trouvée sur la page de l'offre
   first_seen_at INTEGER NOT NULL,        -- première collecte où l'offre est apparue
   last_seen_at INTEGER NOT NULL,         -- dernière collecte où elle était en ligne
   closed_at INTEGER,                     -- collecte où elle a disparu (null = en ligne)
@@ -83,6 +83,16 @@ CREATE TABLE IF NOT EXISTS search_cache (
   PRIMARY KEY (query, page)
 );
 
+-- Pages d'offre lues à la recherche de leurs dates (offres dont la source ne
+-- donne pas de date de publication) : les dates suivent l'offre si elle est
+-- réenregistrée, et la page est relue de temps en temps pour sa date de modification.
+CREATE TABLE IF NOT EXISTS job_dates (
+  url TEXT PRIMARY KEY,
+  posted_at INTEGER,                     -- null : la page ne donne pas de date fiable
+  modified_at INTEGER,                   -- dernière modification de la page (null si inconnue)
+  checked_at INTEGER NOT NULL
+);
+
 -- Taille, signalements et nature des entreprises (remplis par les scripts de scripts/)
 CREATE TABLE IF NOT EXISTS company_sizes (company_key TEXT PRIMARY KEY, headcount INTEGER NOT NULL, source TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS company_flags (company_key TEXT PRIMARY KEY, flag TEXT NOT NULL);
@@ -107,6 +117,8 @@ function addColumnIfMissing(table: string, column: string, ddl: string): void {
 addColumnIfMissing("jobs", "company_key", "company_key TEXT");
 // annonce probablement publiée par un cabinet ou une ESN (sources agrégées uniquement)
 addColumnIfMissing("jobs", "agency", "agency INTEGER NOT NULL DEFAULT 0");
+// dernière modification de la page de l'offre, quand elle a été lue (voir job_dates)
+addColumnIfMissing("jobs", "modified_at", "modified_at INTEGER");
 db.exec("CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs (company_key, closed_at)");
 // offres enregistrées avant l'ajout de company_key
 {

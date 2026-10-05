@@ -22,6 +22,7 @@ export interface Posting {
   url: string;
   description: string | null; // texte brut, tronqué
   posted_at: number | null; // date de publication (ms)
+  modified_at?: number | null; // dernière modification de la page de l'offre, quand elle a été lue (voir sources/job-date.ts)
 }
 
 const TIMEOUT = 20000;
