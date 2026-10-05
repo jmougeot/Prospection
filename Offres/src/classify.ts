@@ -54,6 +54,15 @@ export function techCategory(title: string, department: string | null): JobCateg
   return null;
 }
 
+// « Apprentissage » seul désigne le contrat ; suivi d'un qualificatif, c'est du machine learning.
+const ALTERNANCE =
+  /\b(alternan\w+|apprentie?s?|apprentice(ship)?s?|contrat (de )?pro(fessionnalisation)?|work[- ]study|apprentissage(?! (automatique|profond|machine|statistique|supervise|non supervise|par renforcement|federe)))\b/;
+
+/** L'intitulé annonce-t-il une alternance (contrat d'apprentissage ou de professionnalisation) ? */
+export function isAlternance(title: string): boolean {
+  return ALTERNANCE.test(norm(title));
+}
+
 // Mention de genre d'un intitulé : « H/F », « (F/H/X) », « - h/f/nb », « (m/w/d) », « (H-F) », « H/F*** »…
 // avec le séparateur qui la précède. Sans parenthèses, seuls la barre oblique et « H-F » sont reconnus.
 const GENDER = "(?:nb|mx|[hfmxndw])";

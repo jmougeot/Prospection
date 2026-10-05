@@ -48,7 +48,6 @@
       <textarea id="fRefs" rows="3" placeholder="qonto.com
 https://jobs.lever.co/mistral
 greenhouse:algolia"></textarea>
-      <div class="muted">Une entrée par ligne : site de l'entreprise, URL d'offre ou de page carrières, ou « ats:slug ».</div>
       <button class="ghost block" onclick="addBoards()">Ajouter</button>
     </details>
   </section>
@@ -91,8 +90,11 @@ greenhouse:algolia"></textarea>
     </div>
     <label class="field-label" for="lMinOpen">Offres tech en ligne, au moins</label>
     <div class="unit"><input id="lMinOpen" type="number" min="0" placeholder="0"><span class="muted">offres</span></div>
-    <label class="check" title="Écarte les annonces des agrégateurs signalées comme cabinet de recrutement ou ESN">
-      <input type="checkbox" id="lHideAgency"> Masquer cabinets / ESN
+    <label class="check" title="Écarte les sociétés de conseil, ESN, agences et cabinets de recrutement : entreprises classées ou signalées comme telles, et annonces qui en ont l'air">
+      <input type="checkbox" id="lHideAgency" checked> Masquer conseil, ESN, agences et cabinets
+    </label>
+    <label class="check" title="Écarte les offres dont l'intitulé annonce une alternance ou un apprentissage, et celles des écoles et organismes d'alternance">
+      <input type="checkbox" id="lHideAlternance" checked> Masquer alternances et écoles
     </label>
   </div>
   </section>
@@ -107,7 +109,7 @@ greenhouse:algolia"></textarea>
   <!-- Offres -->
   <div class="card tablecard">
     <div class="cardhead">
-      <div class="inline"><h2 style="margin:0">Offres</h2><span class="count" id="count"></span></div>
+      <div class="inline"><h2 style="margin:0">Entreprises</h2><span class="count" id="count"></span></div>
       <button class="ghost" onclick="exportCsv()">⬇ Exporter en CSV</button>
     </div>
     <div id="jobProgress" hidden style="padding:14px 20px 0">
@@ -121,12 +123,12 @@ greenhouse:algolia"></textarea>
     <table>
       <thead><tr>
         <th style="width:36px"><input type="checkbox" id="ckAll" onchange="toggleAll(this.checked)"></th>
-        <th>Poste</th><th>Entreprise</th>
+        <th>Entreprise</th>
         <th title="Décideur tech de l'entreprise (CTO, VP / Head of Engineering, fondateur) trouvé sur LinkedIn">Contact</th>
-        <th>Catégorie</th><th>Localisation</th>
-        <th title="Jours écoulés depuis la publication de l'offre ; en dessous, dernière modification de sa page quand elle a été retouchée depuis">En ligne</th>
-        <th title="Offres tech France en ligne dans la même entreprise">Offres boîte</th>
-        <th>Offre</th>
+        <th title="La plus récente des offres de l'entreprise retenues par les filtres">Offre la plus récente</th>
+        <th>Localisation</th>
+        <th title="Jours écoulés depuis la publication de cette offre ; en dessous, dernière modification de sa page quand elle a été retouchée depuis">Publiée</th>
+        <th title="Offres de l'entreprise retenues par les filtres ; toutes sont dans sa fiche">Offres</th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -180,7 +182,7 @@ async function loadMeta() {
 async function init() {
   // tout changement dans le panneau de filtres relance la liste (saisie temporisée)
   let filterTimer;
-  $("#filters").addEventListener("input", () => { clearTimeout(filterTimer); filterTimer = setTimeout(loadJobs, 250); });
+  $("#filters").addEventListener("input", () => { clearTimeout(filterTimer); filterTimer = setTimeout(loadCompanies, 250); });
   $("#fDiscover").addEventListener("change", (e) => ($("#budgetWrap").hidden = !e.target.checked));
   $("#fSites").addEventListener("change", (e) => ($("#sitesWrap").hidden = !e.target.checked));
   const meta = await loadMeta();
@@ -189,7 +191,7 @@ async function init() {
   // un job tournait déjà (page rechargée) : on raccroche le suivi
   const s = await api("/api/status").catch(() => null);
   if (s && s.running) trackJob();
-  loadJobs();
+  loadCompanies();
 }
 
 async function collect() {
@@ -257,7 +259,7 @@ function trackJob() {
     $("#jobLabel").textContent = s.phase === "collect"
       ? `${s.done}/${s.total} page(s) lue(s) · ${s.open_jobs} offre(s) dont ${s.new_jobs} nouvelle(s)` + (s.current ? ` — ${s.current}` : "")
       : `${PHASES[s.phase] || "Collecte"} — ${s.new_boards} nouvelle(s) page(s) carrières` + (s.current ? ` · ${s.current}` : "");
-    if (s.done + s.open_jobs !== lastDone) { lastDone = s.done + s.open_jobs; loadJobs(); }
+    if (s.done + s.open_jobs !== lastDone) { lastDone = s.done + s.open_jobs; loadCompanies(); }
     if (!s.running) {
       clearInterval(poll);
       setRunning(false);
@@ -267,12 +269,12 @@ function trackJob() {
       if (s.errors.length) notify(`Terminé avec ${s.errors.length} erreur(s) : ${s.errors[0]}`, false);
       else notify(`Collecte terminée : ${summary}.`);
       loadMeta();
-      loadJobs();
+      loadCompanies();
     }
   }, 1500);
 }
 
-let jobs = [];
+let companies = [];
 function jobParams() {
   const params = new URLSearchParams();
   params.set("status", $("#lStatus").value);
@@ -283,26 +285,33 @@ function jobParams() {
   if ($("#lMinSize").value !== "" && +$("#lMinSize").value >= 0) params.set("min_size", $("#lMinSize").value);
   if ($("#lMaxSize").value !== "" && +$("#lMaxSize").value >= 0) params.set("max_size", $("#lMaxSize").value);
   if ($("#lHideAgency").checked) params.set("hide_agency", "1");
+  if ($("#lHideAlternance").checked) params.set("hide_alternance", "1");
   return params;
 }
 
-/** Décideur tech de l'entreprise : nom lié au profil LinkedIn, poste, et alerte si le rattachement est incertain. */
+/** Décideur tech de l'entreprise : nom lié au profil LinkedIn, poste, et alerte si le rattachement est incertain ; en dessous, le second contact s'il y en a un. */
 function contactCell(j) {
-  if (!j.contact_linkedin) return '<span class="muted">—</span>';
+  const second = j.contact2_linkedin
+    ? `<div class="cell-sub">+ <a class="lk" href="${esc(j.contact2_linkedin)}" target="_blank" rel="noopener">${esc([j.contact2_first_name, j.contact2_last_name].filter(Boolean).join(" ") || "Profil LinkedIn")}</a>${j.contact2_role ? ` · ${esc(j.contact2_role)}` : ""}</div>`
+    : "";
+  if (!j.contact_linkedin) return second || '<span class="muted">—</span>';
   const name = [j.contact_first_name, j.contact_last_name].filter(Boolean).join(" ") || "Profil LinkedIn";
   const unsure = j.contact_confidence === "haute" ? "" : ` <span class="pill held" title="${esc(j.contact_reason)}">à vérifier</span>`;
   return `<a class="lk" href="${esc(j.contact_linkedin)}" target="_blank" rel="noopener" title="${esc(j.contact_reason)}">${esc(name)}</a>${unsure}` +
-    (j.contact_role ? `<div class="cell-sub">${esc(j.contact_role)}</div>` : "");
+    (j.contact_role ? `<div class="cell-sub">${esc(j.contact_role)}</div>` : "") + second;
 }
 
-/** Remet le panneau de filtres dans son état initial (offres en ligne, sans autre critère). */
+/** Le filtre est-il dans son état initial ? */
+const pristine = (el) => (el.type === "checkbox" ? el.checked === el.defaultChecked : el.tagName === "SELECT" ? el.selectedIndex === 0 : el.value === "");
+
+/** Remet le panneau de filtres dans son état initial (offres en ligne, conseil / ESN et alternances masqués, sans autre critère). */
 function resetFilters() {
   $$("#filters input, #filters select").forEach((el) => {
-    if (el.type === "checkbox") el.checked = false;
+    if (el.type === "checkbox") el.checked = el.defaultChecked;
     else if (el.tagName === "SELECT") el.selectedIndex = 0;
     else el.value = "";
   });
-  loadJobs();
+  loadCompanies();
 }
 
 /** Ancienneté d'une offre : exacte si sa date de publication est connue, minimale si seule une modification de sa page l'est. */
@@ -313,29 +322,30 @@ function ageLabel(j) {
 }
 
 let loadSeq = 0;
-async function loadJobs() {
+/* Tableau : une ligne par entreprise, celle dont l'offre est la plus récente en premier. */
+async function loadCompanies() {
   const params = jobParams();
-  // « statut » est toujours envoyé : seuls les autres critères comptent comme filtres actifs
-  $("#resetBtn").hidden = [...params.keys()].length === 1 && params.get("status") === "open";
+  $("#resetBtn").hidden = $$("#filters input, #filters select").every(pristine);
   const seq = ++loadSeq;
-  const rows = await api("/api/jobs?" + params);
+  const rows = await api("/api/companies?" + params);
   if (seq !== loadSeq) return; // une saisie plus récente a déjà relancé la liste
-  jobs = rows;
+  companies = rows;
   const emptyMsg = running
-    ? "Collecte en cours… les offres apparaissent ici au fur et à mesure."
+    ? "Collecte en cours… les entreprises apparaissent ici au fur et à mesure."
     : "Aucune offre — lancez une collecte ci-dessus.";
-  $("#rows").innerHTML = jobs.map((j) => `<tr>
-      <td><input type="checkbox" class="ck" value="${j.id}"></td>
-      <td><span class="nm" style="font-weight:600">${esc(j.title)}</span>${j.department ? `<div class="cell-sub">${esc(j.department)}</div>` : ""}</td>
-      <td><button class="co" onclick="openCompany('${esc(j.company_key)}')" title="Voir la fiche de l'entreprise">${esc(j.company)}</button>${j.agency ? ' <span class="pill held" title="Annonce probablement publiée par un cabinet de recrutement ou une ESN">cabinet / ESN ?</span>' : ""}<div class="cell-sub">via ${esc(j.ats)}${j.headcount != null ? ` · ${j.headcount.toLocaleString("fr-FR")} pers.` : ""}</div></td>
-      <td>${contactCell(j)}</td>
-      <td>${esc(CATEGORIES[j.category] || j.category)}</td>
-      <td>${esc(j.location || "—")}${j.remote ? ' <span class="muted">· télétravail</span>' : ""}</td>
-      <td>${ageLabel(j)}${j.closed_at ? ' <span class="muted">(fermée)</span>' : ""}${j.days_modified != null ? `<div class="cell-sub">modifiée il y a ${j.days_modified} j</div>` : ""}</td>
-      <td>${j.company_open}</td>
-      <td><a class="lk" href="${esc(j.url)}" target="_blank" rel="noopener">Voir ↗</a></td>
-    </tr>`).join("") || `<tr><td colspan="9"><div class="empty">${emptyMsg}</div></td></tr>`;
-  $("#count").textContent = jobs.length ? `${jobs.length} offre(s)` : "";
+  // « sur N » : l'entreprise a d'autres offres en ligne, écartées par les filtres
+  const others = (c) => (params.get("status") === "open" && c.company_open > c.offers ? ` <span class="muted">sur ${c.company_open}</span>` : "");
+  $("#rows").innerHTML = companies.map((c) => `<tr>
+      <td><input type="checkbox" class="ck" value="${esc(c.company_key)}"></td>
+      <td><button class="co" onclick="openCompany('${esc(c.company_key)}')" title="Voir la fiche de l'entreprise et toutes ses offres">${esc(c.company)}</button>${c.agency ? ' <span class="pill held" title="Annonce probablement publiée par un cabinet de recrutement ou une ESN">cabinet / ESN ?</span>' : ""}${c.headcount != null ? `<div class="cell-sub">${c.headcount.toLocaleString("fr-FR")} pers.</div>` : ""}</td>
+      <td>${contactCell(c)}</td>
+      <td><a class="lk" href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)} ↗</a><div class="cell-sub">${esc(CATEGORIES[c.category] || c.category)} · via ${esc(c.ats)}</div></td>
+      <td>${esc(c.location || "—")}${c.remote ? ' <span class="muted">· télétravail</span>' : ""}</td>
+      <td>${ageLabel(c)}${c.closed_at ? ' <span class="muted">(fermée)</span>' : ""}${c.days_modified != null ? `<div class="cell-sub">modifiée il y a ${c.days_modified} j</div>` : ""}</td>
+      <td>${c.offers}${others(c)}</td>
+    </tr>`).join("") || `<tr><td colspan="7"><div class="empty">${emptyMsg}</div></td></tr>`;
+  const offers = companies.reduce((n, c) => n + c.offers, 0);
+  $("#count").textContent = companies.length ? `${companies.length} entreprise(s) · ${offers} offre(s)` : "";
 }
 
 const COMPANY_TYPES = { produit: "Éditeur / startup produit", conseil_esn_agence: "Conseil, ESN ou agence", cabinet_recrutement: "Cabinet de recrutement", ecole: "École", autre: "Autre" };
@@ -363,14 +373,16 @@ async function openCompany(key) {
     ["Page carrières", c.site && c.site.careers_url && link(c.site.careers_url, "Ouvrir")],
     ["Sources", esc(c.sources.join(", "))],
   ]);
+  const person = (p) => `<dl>${rows([
+      ["Nom", link(p.linkedin, [p.first_name, p.last_name].filter(Boolean).join(" ") || "Profil LinkedIn")],
+      ["Poste", esc(p.role)],
+      ["Confiance", esc(p.confidence) + (p.reason ? `<div class="cell-sub">${esc(p.reason)}</div>` : "")],
+    ])}</dl>`;
   const k = c.contact;
+  const k2 = c.contact2;
   const contact = !k ? '<span class="muted">Pas encore cherché.</span>'
     : !k.linkedin ? `<span class="muted">Aucun décideur tech trouvé.${k.reason ? " " + esc(k.reason) : ""}</span>`
-    : `<dl>${rows([
-        ["Nom", link(k.linkedin, [k.first_name, k.last_name].filter(Boolean).join(" ") || "Profil LinkedIn")],
-        ["Poste", esc(k.role)],
-        ["Confiance", esc(k.confidence) + (k.reason ? `<div class="cell-sub">${esc(k.reason)}</div>` : "")],
-      ])}</dl>`;
+    : person(k);
   const jobsHtml = c.jobs.map((j) => `<div class="job">
       <a class="lk" href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a>
       <div class="cell-sub">${esc(CATEGORIES[j.category] || j.category)} · ${esc(j.location || "lieu non précisé")}${j.remote ? " · télétravail" : ""} · en ligne depuis : ${ageLabel(j)}${j.days_modified != null ? ` · modifiée il y a ${j.days_modified} j` : ""}</div>
@@ -380,9 +392,29 @@ async function openCompany(key) {
     <div class="muted">${c.jobs.length} offre(s) tech en ligne${c.closed_jobs ? ` · ${c.closed_jobs} fermée(s)` : ""}</div>
     <h3>Entreprise</h3>${info ? `<dl>${info}</dl>` : '<span class="muted">Aucune information.</span>'}
     <h3>Contact</h3>${contact}
+    ${k2 ? `<h3>Second contact</h3>${person(k2)}` : ""}
+    <div class="inline" style="margin-top:10px">
+      <input id="coLinkedin" type="url" placeholder="https://www.linkedin.com/in/…" style="flex:1; min-width:0" onkeydown="if (event.key === 'Enter') saveContact('${esc(c.key)}')">
+      <button class="ghost" onclick="saveContact('${esc(c.key)}')">${k && k.linkedin ? "Remplacer" : "Ajouter"}</button>
+      ${k && k.linkedin ? `<button class="ghost" onclick="saveContact('${esc(c.key)}', true)" title="Garde le contact actuel et ajoute ce profil à côté">${k2 ? "Remplacer le 2ᵉ" : "Ajouter en 2ᵉ"}</button>` : ""}
+    </div>
     <h3>Offres en ligne</h3>${jobsHtml}`;
   $("#coDrawer").hidden = $("#coBack").hidden = false;
   $("#coDrawer").scrollTop = 0;
+}
+
+/** Enregistre comme contact de l'entreprise (ou comme second contact) le profil LinkedIn collé dans sa fiche, puis rafraîchit la fiche et le tableau. */
+async function saveContact(key, second = false) {
+  const linkedin = $("#coLinkedin").value.trim();
+  if (!linkedin) return notify("Collez l'URL du profil LinkedIn.", false);
+  try {
+    const k = await api("/api/contact", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, linkedin, second }) });
+    notify(`Contact enregistré : ${[k.first_name, k.last_name].filter(Boolean).join(" ") || "profil LinkedIn"}`);
+    await openCompany(key);
+    loadCompanies();
+  } catch (e) {
+    notify(e.message, false);
+  }
 }
 
 function closeCompany() {
@@ -396,10 +428,11 @@ function toggleAll(checked) {
 
 function exportCsv() {
   const params = jobParams();
-  const ids = $$(".ck:checked").map((c) => c.value);
-  if (ids.length) params.set("ids", ids.join(","));
-  if (!ids.length && !jobs.length) return notify("Rien à exporter.", false);
-  window.location.href = "/api/jobs.csv?" + params;
+  const keys = $$(".ck:checked").map((c) => c.value);
+  // tout cocher revient à ne rien cocher : les filtres désignent déjà ces entreprises
+  if (keys.length && keys.length < companies.length) params.set("keys", keys.join(","));
+  if (!companies.length) return notify("Rien à exporter.", false);
+  window.location.href = "/api/companies.csv?" + params;
 }
 
 init();

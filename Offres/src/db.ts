@@ -106,6 +106,15 @@ CREATE TABLE IF NOT EXISTS contacts (
   reason TEXT,
   found_at INTEGER NOT NULL
 );
+
+-- Second contact d'une entreprise, gardé à côté du premier (par exemple son dirigeant en plus du décideur tech)
+CREATE TABLE IF NOT EXISTS second_contacts (
+  company_key TEXT PRIMARY KEY,
+  first_name TEXT, last_name TEXT, role TEXT, linkedin TEXT,
+  confidence TEXT NOT NULL,              -- haute | moyenne | faible
+  reason TEXT,
+  found_at INTEGER NOT NULL
+);
 `);
 
 // Migrations additives sur les bases existantes (no-op si déjà présentes)
