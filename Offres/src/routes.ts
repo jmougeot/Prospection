@@ -39,7 +39,7 @@ interface JobRow {
   headcount: number | null; // effectif de l'entreprise (null si inconnu)
   days_open: number; // jours en ligne (jusqu'à la fermeture si l'offre est fermée)
   days_modified: number | null; // jours depuis la dernière modification de la page de l'offre (null : inconnue ou jamais retouchée)
-  // décideur tech de l'entreprise (null si aucun n'a été trouvé ou cherché)
+  // personne à contacter dans l'entreprise (null si aucune n'a été trouvée ou cherchée)
   contact_first_name: string | null;
   contact_last_name: string | null;
   contact_role: string | null;

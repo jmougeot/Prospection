@@ -98,7 +98,8 @@ CREATE TABLE IF NOT EXISTS company_sizes (company_key TEXT PRIMARY KEY, headcoun
 CREATE TABLE IF NOT EXISTS company_flags (company_key TEXT PRIMARY KEY, flag TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS company_types (company_key TEXT PRIMARY KEY, type TEXT NOT NULL, reason TEXT);
 
--- Décideur tech à contacter par entreprise (rempli par scripts/find-contacts.ts)
+-- Personne à contacter par entreprise : décideur tech, ou responsable du recrutement au-delà de 50 personnes
+-- (rempli par scripts/find-contacts.ts)
 CREATE TABLE IF NOT EXISTS contacts (
   company_key TEXT PRIMARY KEY,
   first_name TEXT, last_name TEXT, role TEXT, linkedin TEXT,
@@ -107,7 +108,8 @@ CREATE TABLE IF NOT EXISTS contacts (
   found_at INTEGER NOT NULL
 );
 
--- Second contact d'une entreprise, gardé à côté du premier (par exemple son dirigeant en plus du décideur tech)
+-- Second contact d'une entreprise, gardé à côté du premier : le manager de l'équipe technique à côté du responsable
+-- du recrutement (scripts/find-contacts.ts), ou un profil ajouté à la main
 CREATE TABLE IF NOT EXISTS second_contacts (
   company_key TEXT PRIMARY KEY,
   first_name TEXT, last_name TEXT, role TEXT, linkedin TEXT,

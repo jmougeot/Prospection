@@ -124,7 +124,7 @@ greenhouse:algolia"></textarea>
       <thead><tr>
         <th style="width:36px"><input type="checkbox" id="ckAll" onchange="toggleAll(this.checked)"></th>
         <th>Entreprise</th>
-        <th title="Décideur tech de l'entreprise (CTO, VP / Head of Engineering, fondateur) trouvé sur LinkedIn">Contact</th>
+        <th title="Personne à contacter trouvée sur LinkedIn : décideur tech (CTO, fondateur) jusqu'à 50 personnes ; au-delà, responsable du recrutement, puis manager de l'équipe technique en second">Contact</th>
         <th title="La plus récente des offres de l'entreprise retenues par les filtres">Offre la plus récente</th>
         <th>Localisation</th>
         <th title="Jours écoulés depuis la publication de cette offre ; en dessous, dernière modification de sa page quand elle a été retouchée depuis">Publiée</th>
@@ -289,7 +289,7 @@ function jobParams() {
   return params;
 }
 
-/** Décideur tech de l'entreprise : nom lié au profil LinkedIn, poste, et alerte si le rattachement est incertain ; en dessous, le second contact s'il y en a un. */
+/** Contact de l'entreprise : nom lié au profil LinkedIn, poste, et alerte si le rattachement est incertain ; en dessous, le second contact s'il y en a un. */
 function contactCell(j) {
   const second = j.contact2_linkedin
     ? `<div class="cell-sub">+ <a class="lk" href="${esc(j.contact2_linkedin)}" target="_blank" rel="noopener">${esc([j.contact2_first_name, j.contact2_last_name].filter(Boolean).join(" ") || "Profil LinkedIn")}</a>${j.contact2_role ? ` · ${esc(j.contact2_role)}` : ""}</div>`
@@ -381,7 +381,7 @@ async function openCompany(key) {
   const k = c.contact;
   const k2 = c.contact2;
   const contact = !k ? '<span class="muted">Pas encore cherché.</span>'
-    : !k.linkedin ? `<span class="muted">Aucun décideur tech trouvé.${k.reason ? " " + esc(k.reason) : ""}</span>`
+    : !k.linkedin ? `<span class="muted">Aucun contact trouvé.${k.reason ? " " + esc(k.reason) : ""}</span>`
     : person(k);
   const jobsHtml = c.jobs.map((j) => `<div class="job">
       <a class="lk" href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a>
