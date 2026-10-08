@@ -384,8 +384,9 @@ async function openCompany(key) {
     : !k.linkedin ? `<span class="muted">Aucun contact trouvé.${k.reason ? " " + esc(k.reason) : ""}</span>`
     : person(k);
   const jobsHtml = c.jobs.map((j) => `<div class="job">
-      <a class="lk" href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a>
+      <a class="lk" href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a>${c.cited && c.cited.id === j.id ? ` <span class="pill replied" title="Offre citée dans les messages : « ${esc(c.cited.title)} »">à citer</span>` : ""}
       <div class="cell-sub">${esc(CATEGORIES[j.category] || j.category)} · ${esc(j.location || "lieu non précisé")}${j.remote ? " · télétravail" : ""} · en ligne depuis : ${ageLabel(j)}${j.days_modified != null ? ` · modifiée il y a ${j.days_modified} j` : ""}</div>
+      ${j.skills && j.skills.length ? `<div class="cell-sub">${esc(j.skills.join(", "))}</div>` : ""}
     </div>`).join("") || '<span class="muted">Aucune offre en ligne.</span>';
   $("#coDrawer").innerHTML = `
     <div class="drawer-head"><h2>${esc(c.name)}</h2><button class="ghost" onclick="closeCompany()">Fermer</button></div>

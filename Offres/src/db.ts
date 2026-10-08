@@ -130,6 +130,16 @@ addColumnIfMissing("jobs", "company_key", "company_key TEXT");
 addColumnIfMissing("jobs", "agency", "agency INTEGER NOT NULL DEFAULT 0");
 // dernière modification de la page de l'offre, quand elle a été lue (voir job_dates)
 addColumnIfMissing("jobs", "modified_at", "modified_at INTEGER");
+// offre lue pour un message de prospection (scripts/job-skills.ts) : intitulé tel qu'on le dit dans une phrase, et
+// compétences techniques qu'elle demande, reprises mot pour mot (JSON string[] ; null = pas lue, [] = rien d'exploitable)
+addColumnIfMissing("jobs", "short_title", "short_title TEXT");
+addColumnIfMissing("jobs", "skills", "skills TEXT");
+// 1 : `skills` n'est qu'une liste de langages ou de technologies généralistes, citée en dernier recours quand l'offre
+// ne formule rien de plus précis
+addColumnIfMissing("jobs", "skills_generic", "skills_generic INTEGER NOT NULL DEFAULT 0");
+// paragraphe de personnalisation rédigé pour l'offre citée (scripts/job-pitch.ts, d'après pitch-template.md) ;
+// null = pas rédigé, '' = l'offre ne formule aucune exigence précise
+addColumnIfMissing("jobs", "pitch", "pitch TEXT");
 db.exec("CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs (company_key, closed_at)");
 // offres enregistrées avant l'ajout de company_key
 {
@@ -137,3 +147,7 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs (company_key, close
   const set = db.prepare("UPDATE jobs SET company_key = ? WHERE id = ?");
   db.transaction(() => rows.forEach((r) => set.run(companyKey(r.company), r.id)))();
 }
+
+// Date depuis laquelle une offre est en ligne : sa publication ; à défaut, le plus ancien
+// signe qu'on en a (première collecte, ou dernière modification de sa page si elle est antérieure).
+export const SINCE = (t = ""): string => `COALESCE(${t}posted_at, MIN(${t}first_seen_at, COALESCE(${t}modified_at, ${t}first_seen_at)))`;

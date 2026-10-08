@@ -26,7 +26,7 @@ export function isInFrance(location: string | null, country: string | null): boo
 // Métiers non techniques dont l'intitulé contient souvent un mot tech (« Sales
 // Engineer », « Account Executive, AI »…) : ils l'emportent sur tout le reste.
 const NON_TECH =
-  /\b(sales|account (executive|manager|director)|commercial|commerciale|marketing|recruiter|recruteur|recruteuse|talent|customer success|csm|business dev\w*|biz ?dev|bdr|sdr|juriste|legal|comptable|accountant|payroll|office manager|assistant|assistante|partnerships?|avant[- ]vente|pre[- ]?sales|solutions? (engineer|consultant|architect)|support|ingenieur (d'affaires|commercial)|charge d'affaires|people (partner|ops|operations)|product (manager|owner|designer|marketing)|chef de produit|designer)\b/;
+  /\b(sales|account (executive|manager|director)|commercial|commerciale|marketing|marketer|recruiter|recruteur|recruteuse|talent|customer success|csm|business dev\w*|biz ?dev|bdr|sdr|juriste|legal|comptable|accountant|payroll|office manager|assistant|assistante|partnerships?|avant[- ]vente|pre[- ]?sales|solutions? (engineer|consultant|architect)|support|ingenieur (d'affaires|commercial)|charge d'affaires|people (partner|ops|operations)|product (manager|owner|designer|marketing)|chef de produit|designer)\b/;
 
 const DATA_ML =
   /\b(machine learning|ml|mlops|llm|nlp|deep learning|computer vision|genai|data science|data (scientist|engineer|analyst|architect|ingenieur)|(ingenieur|engineer|scientist|architecte|analyste|developpeur) (data|ia|ai|ml)|analytics engineer|research (engineer|scientist)|applied scientist|ai (engineer|researcher|scientist)|head of (ai|data))\b/;
@@ -61,6 +61,22 @@ const ALTERNANCE =
 /** L'intitulé annonce-t-il une alternance (contrat d'apprentissage ou de professionnalisation) ? */
 export function isAlternance(title: string): boolean {
   return ALTERNANCE.test(norm(title));
+}
+
+// Stages, thèses, VIE : avec l'alternance, les postes qu'on ne pourvoit pas en allant chercher un ingénieur en poste.
+const TRAINEE = /\b(stage|stagiaire|intern|internship|these|cifre|phd|doctorant\w*|summer|graduate program)\b/;
+const VIE = /\bV\.?I\.?E\b/; // sur l'intitulé tel quel : en minuscules, « vie » est un mot courant
+
+/** L'intitulé annonce-t-il un poste d'apprenant (alternance, stage, thèse, VIE) ? */
+export function isTrainee(title: string): boolean {
+  return isAlternance(title) || TRAINEE.test(norm(title)) || VIE.test(title);
+}
+
+const LEADERSHIP = /\b(cto|chief|head of|vp|vice[- ]president|directeur|directrice|director|manager|responsable)\b/;
+
+/** L'intitulé est-il celui d'un poste de direction ou d'encadrement (« Head of Data », « Engineering Manager ») ? */
+export function isLeadership(title: string): boolean {
+  return LEADERSHIP.test(norm(title));
 }
 
 // Mention de genre d'un intitulé : « H/F », « (F/H/X) », « - h/f/nb », « (m/w/d) », « (H-F) », « H/F*** »…

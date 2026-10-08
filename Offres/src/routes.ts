@@ -5,13 +5,14 @@
 import fs from "node:fs";
 import Database from "better-sqlite3";
 import type express from "express";
-import { db } from "./db.js";
+import { db, SINCE } from "./db.js";
 import { isAlternance } from "./classify.js";
 import { addBoardsFromText, jobStatus, startCollect, stopCollect } from "./collect.js";
 import { companyKey } from "./company.js";
 import { config } from "./config.js";
 import { addManualContact, profileUrl } from "./contact.js";
 import { hasSearchApi } from "./discover.js";
+import { citedOffer, joinSkills } from "./pitch.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -52,10 +53,6 @@ interface JobRow {
   contact2_role: string | null;
   contact2_linkedin: string | null;
 }
-
-// Date depuis laquelle une offre est en ligne : sa publication ; à défaut, le plus ancien
-// signe qu'on en a (première collecte, ou dernière modification de sa page si elle est antérieure).
-const SINCE = (t = ""): string => `COALESCE(${t}posted_at, MIN(${t}first_seen_at, COALESCE(${t}modified_at, ${t}first_seen_at)))`;
 
 /** Jours écoulés depuis la dernière modification de la page d'une offre ; null si elle est inconnue ou si la page n'a pas été retouchée depuis. */
 const daysModified = (modified: number | null, since: number, now: number): number | null =>
@@ -197,11 +194,11 @@ function enrichedCompany(key: string): EnrichedCompany | null {
 function companyCard(key: string) {
   const jobs = db
     .prepare(
-      `SELECT id, title, company, category, location, remote, url, ats, agency, posted_at, modified_at,
+      `SELECT id, title, company, category, location, remote, url, ats, agency, posted_at, modified_at, skills,
               ${SINCE()} AS since
        FROM jobs WHERE company_key = ? AND closed_at IS NULL ORDER BY (posted_at IS NULL AND modified_at IS NULL), since DESC`
     )
-    .all(key) as Array<{ company: string; since: number; ats: string; posted_at: number | null; modified_at: number | null }>;
+    .all(key) as Array<{ company: string; since: number; ats: string; posted_at: number | null; modified_at: number | null; skills: string | null }>;
   const last = db.prepare("SELECT company FROM jobs WHERE company_key = ? ORDER BY last_seen_at DESC LIMIT 1").get(key) as { company: string } | undefined;
   if (!last) return null;
   const now = Date.now();
@@ -217,8 +214,10 @@ function companyCard(key: string) {
     site: db.prepare("SELECT domain, careers_url FROM sites WHERE company = ? OR domain IN (SELECT slug FROM jobs WHERE company_key = ? AND ats = 'site') LIMIT 1").get(jobs[0]?.company ?? last.company, key) ?? null,
     enriched: enrichedCompany(key),
     sources: [...new Set(jobs.map((j) => j.ats))],
+    cited: citedOffer(key), // offre à citer dans un message à l'entreprise (null si elle n'en a aucune de citable)
     jobs: jobs.map((j) => ({
       ...j,
+      skills: j.skills ? (JSON.parse(j.skills) as string[]) : null, // compétences relevées (null : offre pas lue)
       days_open: Math.max(0, Math.floor((now - j.since) / DAY)),
       days_modified: daysModified(j.modified_at, j.since, now),
     })),
@@ -290,18 +289,21 @@ export function registerRoutes(app: express.Express): void {
     const headers = [
       "entreprise", "effectif", "offres_tech", "offre_la_plus_recente", "publiee_le", "url_offre",
       "prenom", "nom", "poste", "linkedin", "confiance", "prenom_2", "nom_2", "poste_2", "linkedin_2",
+      "offre_a_citer", "competences", "url_offre_a_citer",
     ];
     const cell = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const day = (t: number | null) => (t ? new Date(t).toISOString().slice(0, 10) : "");
-    const lines = rows.map((r) =>
-      [
+    const lines = rows.map((r) => {
+      const cited = citedOffer(r.company_key);
+      return [
         r.company, r.headcount, r.company_open, r.title, day(r.posted_at ?? r.first_seen_at), r.url,
         r.contact_first_name, r.contact_last_name, r.contact_role, r.contact_linkedin, r.contact_confidence,
         r.contact2_first_name, r.contact2_last_name, r.contact2_role, r.contact2_linkedin,
+        cited?.title, cited && joinSkills(cited.skills), cited?.url,
       ]
         .map(cell)
-        .join(";")
-    );
+        .join(";");
+    });
     // BOM + point-virgule : ouverture directe dans Excel/Numbers FR
     const csv = "﻿" + [headers.join(";"), ...lines].join("\r\n");
     res.setHeader("content-type", "text/csv; charset=utf-8");

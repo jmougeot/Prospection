@@ -29,7 +29,7 @@ const MAX_HTML = 3_000_000;
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-async function get(url: string, accept: string): Promise<Response> {
+export async function get(url: string, accept: string): Promise<Response> {
   return fetch(url, {
     redirect: "follow",
     headers: { "user-agent": USER_AGENT, accept, "accept-language": "fr-FR,fr;q=0.9,en;q=0.8" },
@@ -58,7 +58,7 @@ const words = (s: string): string[] =>
     .filter((w) => w.length >= 2);
 
 /** La page est-elle celle de cette offre ? Son titre (title, h1, og:title) doit reprendre l'essentiel de l'intitulé. */
-function isPageOf(html: string, title: string): boolean {
+export function isPageOf(html: string, title: string): boolean {
   const wanted = words(title);
   if (!wanted.length) return false;
   const headings = [
