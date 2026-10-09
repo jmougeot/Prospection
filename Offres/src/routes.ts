@@ -58,6 +58,58 @@ interface JobRow {
 const daysModified = (modified: number | null, since: number, now: number): number | null =>
   modified !== null && modified - since >= DAY ? Math.max(0, Math.floor((now - modified) / DAY)) : null;
 
+/** ?nature=produit | cabinet_recrutement | conseil_esn_agence… choisie dans les filtres ("" si aucune) */
+const chosenNature = (query: Record<string, unknown>): string => (typeof query.nature === "string" ? query.nature : "");
+
+// Ce qu'on sait d'une entreprise, joint sur la colonne qui porte sa clé : contact (c), second contact (c2),
+// effectif (s), nature (t) et signalement (f)
+const companyJoins = (key: string): string =>
+  `LEFT JOIN contacts c ON c.company_key = ${key} AND c.confidence <> 'aucune'
+       LEFT JOIN second_contacts c2 ON c2.company_key = ${key}
+       LEFT JOIN company_sizes s ON s.company_key = ${key}
+       LEFT JOIN company_types t ON t.company_key = ${key}
+       LEFT JOIN company_flags f ON f.company_key = ${key}`;
+const COMPANY_COLUMNS = `s.headcount,
+              c.first_name AS contact_first_name, c.last_name AS contact_last_name, c.role AS contact_role,
+              c.linkedin AS contact_linkedin, c.confidence AS contact_confidence, c.reason AS contact_reason,
+              c2.first_name AS contact2_first_name, c2.last_name AS contact2_last_name, c2.role AS contact2_role,
+              c2.linkedin AS contact2_linkedin`;
+
+/** Critères qui tiennent à l'entreprise et non à ses offres ; `key` est la colonne qui porte sa clé (voir companyJoins). */
+function companyConds(query: Record<string, unknown>, key: string, conds: string[], params: unknown[]): void {
+  // entreprise signalée disparue (company_flags) : gardée en base avec son contact, mais hors du tableau
+  conds.push("COALESCE(f.flag, '') <> 'disparue'");
+  // ?nature= : seules les entreprises classées de cette nature (voir scripts/classify-companies.ts) ; ce choix décide
+  // seul, hide_agency n'est alors pas lu
+  if (chosenNature(query)) {
+    conds.push("t.type = ?");
+    params.push(chosenNature(query));
+  }
+  // ?hide_agency=1 : écarte les sociétés de conseil, ESN, agences et cabinets de recrutement, classées ou signalées
+  // comme telles
+  else if (query.hide_agency === "1") {
+    conds.push("COALESCE(t.type, '') NOT IN ('conseil_esn_agence', 'cabinet_recrutement') AND COALESCE(f.flag, '') <> 'conseil_ou_cabinet'");
+  }
+  // ?hide_alternance=1 : écarte les écoles et organismes d'alternance
+  if (query.hide_alternance === "1") conds.push("COALESCE(t.type, '') <> 'ecole' AND COALESCE(f.flag, '') <> 'ecole'");
+  // ?min_size= / ?max_size= : effectif de l'entreprise ; une borne écarte les entreprises de taille inconnue
+  for (const [name, op] of [["min_size", ">="], ["max_size", "<="]] as const) {
+    const bound = Number(query[name]);
+    if (query[name] && Number.isFinite(bound) && bound >= 0) {
+      conds.push(`s.headcount ${op} ?`);
+      params.push(bound);
+    }
+  }
+  // ?keys=alan,qonto : entreprises choisies (sélection du tableau)
+  if (query.keys) {
+    const keys = String(query.keys).split(",").filter(Boolean);
+    if (keys.length) {
+      conds.push(`${key} IN (${keys.map(() => "?").join(",")})`);
+      params.push(...keys);
+    }
+  }
+}
+
 function queryJobs(query: Record<string, unknown>): JobRow[] {
   const conds: string[] = [];
   const params: unknown[] = [];
@@ -73,37 +125,17 @@ function queryJobs(query: Record<string, unknown>): JobRow[] {
     const like = `%${String(query.q)}%`;
     params.push(like, like, like);
   }
-  // ?hide_agency=1 : écarte les sociétés de conseil, ESN, agences et cabinets de recrutement — entreprises classées
-  // ou signalées comme telles ; à défaut de classement, annonces qui en ont l'air (le classement de l'entreprise
-  // l'emporte sur l'allure d'une annonce)
-  if (query.hide_agency === "1") {
-    conds.push("COALESCE(t.type, '') NOT IN ('conseil_esn_agence', 'cabinet_recrutement') AND COALESCE(f.flag, '') <> 'conseil_ou_cabinet' AND (j.agency = 0 OR t.type IS NOT NULL)");
-  }
-  // ?hide_alternance=1 : écarte les alternances (d'après l'intitulé) et les offres des écoles et organismes d'alternance
-  if (query.hide_alternance === "1") {
-    conds.push("NOT is_alternance(j.title) AND COALESCE(t.type, '') <> 'ecole' AND COALESCE(f.flag, '') <> 'ecole'");
-  }
-  // ?min_size= / ?max_size= : effectif de l'entreprise ; une borne écarte les entreprises de taille inconnue
-  for (const [name, op] of [["min_size", ">="], ["max_size", "<="]] as const) {
-    const bound = Number(query[name]);
-    if (query[name] && Number.isFinite(bound) && bound >= 0) {
-      conds.push(`s.headcount ${op} ?`);
-      params.push(bound);
-    }
-  }
+  companyConds(query, "j.company_key", conds, params);
+  // ?hide_agency=1 écarte aussi, à défaut de classement de l'entreprise, les annonces qui ont l'air de venir d'un
+  // cabinet ou d'une ESN (le classement de l'entreprise l'emporte sur l'allure d'une annonce)
+  if (!chosenNature(query) && query.hide_agency === "1") conds.push("(j.agency = 0 OR t.type IS NOT NULL)");
+  // ?hide_alternance=1 écarte aussi les alternances, d'après l'intitulé
+  if (query.hide_alternance === "1") conds.push("NOT is_alternance(j.title)");
   if (query.ids) {
     const ids = String(query.ids).split(",").map(Number).filter(Number.isFinite);
     if (ids.length) {
       conds.push(`j.id IN (${ids.map(() => "?").join(",")})`);
       params.push(...ids);
-    }
-  }
-  // ?keys=alan,qonto : entreprises choisies (sélection du tableau)
-  if (query.keys) {
-    const keys = String(query.keys).split(",").filter(Boolean);
-    if (keys.length) {
-      conds.push(`j.company_key IN (${keys.map(() => "?").join(",")})`);
-      params.push(...keys);
     }
   }
   const now = Date.now();
@@ -114,17 +146,9 @@ function queryJobs(query: Record<string, unknown>): JobRow[] {
       `SELECT j.id, j.ats, j.title, j.company, j.company_key, j.category, j.department, j.location, j.remote, j.url,
               j.posted_at, j.modified_at, j.first_seen_at, ${SINCE("j.")} AS since, j.closed_at, j.agency,
               (SELECT COUNT(*) FROM jobs o WHERE o.company_key = j.company_key AND o.closed_at IS NULL) AS company_open,
-              s.headcount,
-              c.first_name AS contact_first_name, c.last_name AS contact_last_name, c.role AS contact_role,
-              c.linkedin AS contact_linkedin, c.confidence AS contact_confidence, c.reason AS contact_reason,
-              c2.first_name AS contact2_first_name, c2.last_name AS contact2_last_name, c2.role AS contact2_role,
-              c2.linkedin AS contact2_linkedin
+              ${COMPANY_COLUMNS}
        FROM jobs j
-       LEFT JOIN contacts c ON c.company_key = j.company_key AND c.confidence <> 'aucune'
-       LEFT JOIN second_contacts c2 ON c2.company_key = j.company_key
-       LEFT JOIN company_sizes s ON s.company_key = j.company_key
-       LEFT JOIN company_types t ON t.company_key = j.company_key
-       LEFT JOIN company_flags f ON f.company_key = j.company_key
+       ${companyJoins("j.company_key")}
        ${conds.length ? "WHERE " + conds.join(" AND ") : ""}
        ORDER BY (j.posted_at IS NULL AND j.modified_at IS NULL), since DESC -- offres sans aucune date en fin de liste
        LIMIT 5000`
@@ -139,14 +163,47 @@ function queryJobs(query: Record<string, unknown>): JobRow[] {
     .filter((r) => r.days_open >= minDays && r.company_open >= minOpen);
 }
 
-/** Une entreprise à prospecter : sa plus récente offre retenue par les filtres, et combien d'offres le sont. */
-interface CompanyRow extends JobRow {
+/**
+ * Une entreprise à prospecter : sa plus récente offre retenue par les filtres, et combien d'offres le sont.
+ * Une entreprise listée sans offre retenue (offers: 0) n'a que ses propres champs, aucun de ceux d'une offre.
+ */
+interface CompanyRow extends Partial<JobRow> {
+  company: string;
+  company_key: string;
   offers: number;
 }
 
 /**
+ * Entreprises listées (listed_companies) que les critères d'entreprise retiennent, par ordre alphabétique : elles
+ * figurent au tableau sans offre. Aucune dès qu'un critère porte sur les offres (catégorie, ancienneté, nombre
+ * d'offres en ligne, offres fermées ou choisies).
+ */
+function queryListed(query: Record<string, unknown>): CompanyRow[] {
+  if (query.status === "closed" || query.category || query.ids || Number(query.min_days) > 0 || Number(query.min_open) > 0) return [];
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (query.q) {
+    conds.push("l.name LIKE ?");
+    params.push(`%${String(query.q)}%`);
+  }
+  companyConds(query, "l.company_key", conds, params);
+  return db
+    .prepare(
+      `SELECT l.company_key, l.name AS company, 0 AS offers,
+              (SELECT COUNT(*) FROM jobs o WHERE o.company_key = l.company_key AND o.closed_at IS NULL) AS company_open,
+              ${COMPANY_COLUMNS}
+       FROM listed_companies l
+       ${companyJoins("l.company_key")}
+       ${conds.length ? "WHERE " + conds.join(" AND ") : ""}
+       ORDER BY l.name COLLATE NOCASE`
+    )
+    .all(...params) as CompanyRow[];
+}
+
+/**
  * Une ligne par entreprise, mêmes filtres que les offres. Les entreprises sont classées par offre la plus
- * récente (queryJobs rend les offres dans cet ordre : la première rencontrée d'une entreprise est sa plus récente).
+ * récente (queryJobs rend les offres dans cet ordre : la première rencontrée d'une entreprise est sa plus récente) ;
+ * les entreprises listées dont aucune offre n'est retenue viennent ensuite.
  */
 function queryCompanies(query: Record<string, unknown>): CompanyRow[] {
   const byKey = new Map<string, CompanyRow>();
@@ -158,6 +215,7 @@ function queryCompanies(query: Record<string, unknown>): CompanyRow[] {
       row.agency ||= job.agency;
     }
   }
+  for (const listed of queryListed(query)) if (!byKey.has(listed.company_key)) byKey.set(listed.company_key, listed);
   return [...byKey.values()];
 }
 
@@ -200,18 +258,21 @@ function companyCard(key: string) {
     )
     .all(key) as Array<{ company: string; since: number; ats: string; posted_at: number | null; modified_at: number | null; skills: string | null }>;
   const last = db.prepare("SELECT company FROM jobs WHERE company_key = ? ORDER BY last_seen_at DESC LIMIT 1").get(key) as { company: string } | undefined;
-  if (!last) return null;
+  // sans aucune offre en base, seule une entreprise listée a une fiche
+  const listed = db.prepare("SELECT name FROM listed_companies WHERE company_key = ?").get(key) as { name: string } | undefined;
+  const name = jobs[0]?.company ?? last?.company ?? listed?.name;
+  if (!name) return null;
   const now = Date.now();
   return {
     key,
-    name: jobs[0]?.company ?? last.company,
+    name,
     closed_jobs: (db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE company_key = ? AND closed_at IS NOT NULL").get(key) as { n: number }).n,
     size: db.prepare("SELECT headcount, source FROM company_sizes WHERE company_key = ?").get(key) ?? null,
     type: db.prepare("SELECT type, reason FROM company_types WHERE company_key = ?").get(key) ?? null,
     flag: (db.prepare("SELECT flag FROM company_flags WHERE company_key = ?").get(key) as { flag: string } | undefined)?.flag ?? null,
     contact: db.prepare("SELECT first_name, last_name, role, linkedin, confidence, reason FROM contacts WHERE company_key = ?").get(key) ?? null,
     contact2: db.prepare("SELECT first_name, last_name, role, linkedin, confidence, reason FROM second_contacts WHERE company_key = ?").get(key) ?? null,
-    site: db.prepare("SELECT domain, careers_url FROM sites WHERE company = ? OR domain IN (SELECT slug FROM jobs WHERE company_key = ? AND ats = 'site') LIMIT 1").get(jobs[0]?.company ?? last.company, key) ?? null,
+    site: db.prepare("SELECT domain, careers_url FROM sites WHERE company = ? OR domain IN (SELECT slug FROM jobs WHERE company_key = ? AND ats = 'site') LIMIT 1").get(name, key) ?? null,
     enriched: enrichedCompany(key),
     sources: [...new Set(jobs.map((j) => j.ats))],
     cited: citedOffer(key), // offre à citer dans un message à l'entreprise (null si elle n'en a aucune de citable)
@@ -292,7 +353,7 @@ export function registerRoutes(app: express.Express): void {
       "offre_a_citer", "competences", "url_offre_a_citer",
     ];
     const cell = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const day = (t: number | null) => (t ? new Date(t).toISOString().slice(0, 10) : "");
+    const day = (t?: number | null) => (t ? new Date(t).toISOString().slice(0, 10) : "");
     const lines = rows.map((r) => {
       const cited = citedOffer(r.company_key);
       return [
@@ -325,7 +386,9 @@ export function registerRoutes(app: express.Express): void {
     const key = String(b.key ?? "");
     const url = profileUrl(String(b.linkedin ?? ""));
     if (!url) return res.status(400).json({ error: "Collez l'URL d'un profil LinkedIn (linkedin.com/in/…)." });
-    if (!db.prepare("SELECT 1 FROM jobs WHERE company_key = ?").get(key)) return res.status(404).json({ error: "Entreprise inconnue" });
+    if (!db.prepare("SELECT 1 FROM jobs WHERE company_key = ? UNION ALL SELECT 1 FROM listed_companies WHERE company_key = ?").get(key, key)) {
+      return res.status(404).json({ error: "Entreprise inconnue" });
+    }
     try {
       res.json(await addManualContact(key, url, b.second === true));
     } catch (err) {

@@ -98,6 +98,10 @@ CREATE TABLE IF NOT EXISTS company_sizes (company_key TEXT PRIMARY KEY, headcoun
 CREATE TABLE IF NOT EXISTS company_flags (company_key TEXT PRIMARY KEY, flag TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS company_types (company_key TEXT PRIMARY KEY, type TEXT NOT NULL, reason TEXT);
 
+-- Entreprises à prospecter sans passer par une offre (liste importée, par exemple des cabinets de recrutement) :
+-- le tableau les montre même quand aucune de leurs offres n'est retenue, sous le nom donné ici
+CREATE TABLE IF NOT EXISTS listed_companies (company_key TEXT PRIMARY KEY, name TEXT NOT NULL);
+
 -- Personne à contacter par entreprise : décideur tech, ou responsable du recrutement au-delà de 50 personnes
 -- (rempli par scripts/find-contacts.ts)
 CREATE TABLE IF NOT EXISTS contacts (

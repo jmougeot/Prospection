@@ -1,6 +1,6 @@
 /**
  * Importe des signalements d'entreprises (fichier JSON { "<signalement>": ["Nom", …] }) dans company_flags :
- * école, conseil_ou_cabinet, pas_une_entreprise.   npx tsx scripts/import-flags.ts <fichier.json>
+ * école, conseil_ou_cabinet, pas_une_entreprise, disparue (écartée du tableau).   npx tsx scripts/import-flags.ts <fichier.json>
  */
 import fs from "node:fs";
 import { db } from "../src/db.js";

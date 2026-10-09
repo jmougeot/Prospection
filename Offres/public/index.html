@@ -82,6 +82,13 @@ greenhouse:algolia"></textarea>
 
   <div class="fgroup">
     <h3>Entreprise</h3>
+    <label class="field-label" for="lNature">Nature</label>
+    <select id="lNature">
+      <option value="">Toutes natures</option>
+      <option value="produit">Boîtes tech</option>
+      <option value="cabinet_recrutement">Cabinets de recrutement</option>
+      <option value="conseil_esn_agence">Conseil, ESN, agences</option>
+    </select>
     <label class="field-label" for="lMinSize" title="Effectif connu de l'entreprise. Dès qu'une borne est saisie, les entreprises de taille inconnue sont écartées.">Nombre de personnes</label>
     <div class="range">
       <input id="lMinSize" type="number" min="0" placeholder="Min">
@@ -284,7 +291,9 @@ function jobParams() {
   if (+$("#lMinOpen").value > 0) params.set("min_open", $("#lMinOpen").value);
   if ($("#lMinSize").value !== "" && +$("#lMinSize").value >= 0) params.set("min_size", $("#lMinSize").value);
   if ($("#lMaxSize").value !== "" && +$("#lMaxSize").value >= 0) params.set("max_size", $("#lMaxSize").value);
-  if ($("#lHideAgency").checked) params.set("hide_agency", "1");
+  // une nature choisie décide seule : la case « Masquer conseil, ESN, agences et cabinets » ne s'applique plus
+  if ($("#lNature").value) params.set("nature", $("#lNature").value);
+  else if ($("#lHideAgency").checked) params.set("hide_agency", "1");
   if ($("#lHideAlternance").checked) params.set("hide_alternance", "1");
   return params;
 }
@@ -325,6 +334,7 @@ let loadSeq = 0;
 /* Tableau : une ligne par entreprise, celle dont l'offre est la plus récente en premier. */
 async function loadCompanies() {
   const params = jobParams();
+  $("#lHideAgency").disabled = Boolean($("#lNature").value);
   $("#resetBtn").hidden = $$("#filters input, #filters select").every(pristine);
   const seq = ++loadSeq;
   const rows = await api("/api/companies?" + params);
@@ -335,13 +345,15 @@ async function loadCompanies() {
     : "Aucune offre — lancez une collecte ci-dessus.";
   // « sur N » : l'entreprise a d'autres offres en ligne, écartées par les filtres
   const others = (c) => (params.get("status") === "open" && c.company_open > c.offers ? ` <span class="muted">sur ${c.company_open}</span>` : "");
+  // entreprise listée sans offre retenue (offers à 0) : les colonnes de l'offre restent vides
+  const none = '<span class="muted">—</span>';
   $("#rows").innerHTML = companies.map((c) => `<tr>
       <td><input type="checkbox" class="ck" value="${esc(c.company_key)}"></td>
       <td><button class="co" onclick="openCompany('${esc(c.company_key)}')" title="Voir la fiche de l'entreprise et toutes ses offres">${esc(c.company)}</button>${c.agency ? ' <span class="pill held" title="Annonce probablement publiée par un cabinet de recrutement ou une ESN">cabinet / ESN ?</span>' : ""}${c.headcount != null ? `<div class="cell-sub">${c.headcount.toLocaleString("fr-FR")} pers.</div>` : ""}</td>
       <td>${contactCell(c)}</td>
-      <td><a class="lk" href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)} ↗</a><div class="cell-sub">${esc(CATEGORIES[c.category] || c.category)} · via ${esc(c.ats)}</div></td>
-      <td>${esc(c.location || "—")}${c.remote ? ' <span class="muted">· télétravail</span>' : ""}</td>
-      <td>${ageLabel(c)}${c.closed_at ? ' <span class="muted">(fermée)</span>' : ""}${c.days_modified != null ? `<div class="cell-sub">modifiée il y a ${c.days_modified} j</div>` : ""}</td>
+      <td>${c.offers ? `<a class="lk" href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)} ↗</a><div class="cell-sub">${esc(CATEGORIES[c.category] || c.category)} · via ${esc(c.ats)}</div>` : none}</td>
+      <td>${c.offers ? esc(c.location || "—") + (c.remote ? ' <span class="muted">· télétravail</span>' : "") : none}</td>
+      <td>${c.offers ? ageLabel(c) + (c.closed_at ? ' <span class="muted">(fermée)</span>' : "") + (c.days_modified != null ? `<div class="cell-sub">modifiée il y a ${c.days_modified} j</div>` : "") : none}</td>
       <td>${c.offers}${others(c)}</td>
     </tr>`).join("") || `<tr><td colspan="7"><div class="empty">${emptyMsg}</div></td></tr>`;
   const offers = companies.reduce((n, c) => n + c.offers, 0);
@@ -349,7 +361,7 @@ async function loadCompanies() {
 }
 
 const COMPANY_TYPES = { produit: "Éditeur / startup produit", conseil_esn_agence: "Conseil, ESN ou agence", cabinet_recrutement: "Cabinet de recrutement", ecole: "École", autre: "Autre" };
-const COMPANY_FLAGS = { ecole: "École", conseil_ou_cabinet: "Conseil ou cabinet", pas_une_entreprise: "Pas une entreprise" };
+const COMPANY_FLAGS = { ecole: "École", conseil_ou_cabinet: "Conseil ou cabinet", pas_une_entreprise: "Pas une entreprise", disparue: "N'existe plus" };
 const SIZE_SOURCES = { wttj: "Welcome to the Jungle", enrichissement: "LinkedIn", recherche: "recherche web", estimation: "estimation" };
 
 /* Fiche d'une entreprise : ce qu'on sait d'elle, son contact et ses offres en ligne. Les lignes vides sont omises. */
