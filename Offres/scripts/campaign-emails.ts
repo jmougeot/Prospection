@@ -124,8 +124,15 @@ function run(input: string): Promise<string> {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve(out);
-      else reject(new Error(`code ${code} : ${out.slice(0, 200)}`));
+      if (code === 0) return resolve(out);
+      // la session dit pourquoi elle a échoué dans son champ `result` (quota de l'abonnement atteint, par exemple)
+      let why = out.slice(0, 200);
+      try {
+        why = String((JSON.parse(out) as { result?: unknown }).result ?? why).slice(0, 300);
+      } catch {
+        // sortie illisible : on garde son début
+      }
+      reject(new Error(`code ${code} : ${why}`));
     });
     child.stdin.end(input);
   });
