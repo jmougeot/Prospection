@@ -310,6 +310,8 @@ function storeFeed(feed: Feed, postings: Posting[]): void {
 // ───────────────────────────── Sites d'entreprise ─────────────────────────────
 
 const touchSite = db.prepare("UPDATE sites SET last_checked_at = ? WHERE domain = ?");
+// Sur le site d'un cabinet de recrutement (classé comme tel), la page à lire est celle des offres qu'il diffuse.
+const isAgencySite = db.prepare("SELECT 1 FROM company_types WHERE company_key = ? AND type = 'cabinet_recrutement'");
 const touchSiteJobs = db.prepare("UPDATE jobs SET last_seen_at = ? WHERE ats = 'site' AND slug = ? AND closed_at IS NULL");
 
 /** Enregistre les offres tech France lues sur le site d'une entreprise ; renvoie le nombre retenu. */
@@ -349,7 +351,8 @@ const SITE_CHUNK = 80; // sites visités puis lus d'une traite : un arrêt ne pe
  * Visite les `limit` sites les plus anciennement vus. Un ATS reconnu devient une
  * page carrières suivie ; sinon les offres balisées du site sont prises telles
  * quelles, et à défaut le texte de la page carrières est lu par le modèle (sauf
- * s'il n'a pas changé depuis la dernière visite).
+ * s'il n'a pas changé depuis la dernière visite). Pour un cabinet de recrutement,
+ * la page lue est celle des offres qu'il diffuse.
  */
 async function checkSites(limit: number): Promise<void> {
   seedSites();
@@ -364,7 +367,7 @@ async function checkSiteChunk(sites: SiteRow[], offset: number, total: number): 
   let visited = offset;
   await pool(sites, 6, async (site) => {
     state.current = `site ${++visited}/${total} — ${site.domain}`;
-    const r = await detectCareers(site.domain);
+    const r = await detectCareers(site.domain, { agency: Boolean(isAgencySite.get(companyKey(site.company))) });
     const refs = boardsFromCareers(r);
     refs.forEach(trackBoard);
     if (refs.length) return saveSite(site.domain, { careersUrl: r.careersUrl, status: "ats" });

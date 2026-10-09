@@ -261,6 +261,25 @@ const ABOUT_PATH = /(^|[/._-])(about(-us)?|a-propos|qui-sommes-nous|societe|entr
 const SOCIAL_HOST = /(^|\.)(linkedin\.com|facebook\.com|twitter\.com|x\.com|instagram\.com|youtube\.com|indeed\.com|glassdoor\.[a-z.]+|apec\.fr|hellowork\.com|malt\.fr)$/;
 const PROBE_PATHS = ["/careers", "/jobs", "/recrutement", "/carrieres", "/join-us", "/nous-rejoindre"];
 
+/** Mots qui désignent, dans les liens et les chemins d'un site, la page où ses offres sont listées. */
+interface Vocab {
+  text: RegExp; // libellé d'un lien
+  strong: RegExp; // libellé sans ambiguïté
+  path: RegExp; // chemin d'une URL
+  probes: string[]; // chemins usuels sondés quand l'accueil ne mène nulle part
+}
+const EMPLOYER: Vocab = { text: CAREERS_TEXT, strong: CAREERS_TEXT_STRONG, path: CAREERS_PATH, probes: PROBE_PATHS };
+// Cabinet de recrutement : « recrutement », « recruter » et « talents » y nomment ses services, « nous rejoindre » et
+// « carrières » ses propres postes de consultant. La page cherchée est celle des offres qu'il diffuse pour ses clients.
+// Au pluriel seulement pour « offres », « postes » et « missions » : « notre offre » est une prestation, « La Poste »
+// un client. « Candidats » et « postuler » ne valent que comme libellés, en signal faible (espace candidat, formulaire).
+const AGENCY: Vocab = {
+  text: /\b(offres|offre d'emploi|jobs?|job ?board|emplois?|annonces?|opportunites|opportunities|postes|poste a pourvoir|missions|postuler|candidats?|open (positions|roles)|vacancies)\b/,
+  strong: /\b(offres? d'emploi|(nos|les|toutes les|voir les|consulter les) offres|jobs|job ?board|emplois?|annonces|opportunites|opportunities|postes? a pourvoir|open positions|vacancies)\b/,
+  path: /(^|[/._-])(offres|offres?-d-?emplois?|offres?-emplois?|jobs?|job-?board|emplois?|annonces?|opportunites|opportunities|postes|missions|vacancies|open-positions)([/._-]|$)/,
+  probes: ["/offres", "/jobs", "/offres-emploi", "/nos-offres", "/offres-d-emploi", "/emploi"],
+};
+
 /** Domaine enregistrable approximatif (deux derniers segments, trois pour « co.uk » et consorts). */
 function registrable(host: string): string {
   const parts = host.toLowerCase().split(".");
@@ -273,7 +292,7 @@ function siteKey(host: string): string {
 }
 
 /** Liens candidats « carrières » d'une page d'accueil, du plus probable au moins probable. */
-function careersCandidates(home: Page): string[] {
+function careersCandidates(home: Page, vocab: Vocab): string[] {
   const homeUrl = new URL(home.url);
   const scored = new Map<string, number>();
   for (const link of extractLinks(home)) {
@@ -287,9 +306,9 @@ function careersCandidates(home: Page): string[] {
     const isAts = atsNameOfUrl(link.url) !== null;
     if (u.pathname.replace(/\/+$/, "") === "" && sameSite && !/^(careers?|jobs?|recrutement|carrieres?|join|emploi)\./.test(host)) continue;
     let score = 0;
-    if (text.length <= 60 && CAREERS_TEXT.test(text)) score += CAREERS_TEXT_STRONG.test(text) ? 3 : 2;
+    if (text.length <= 60 && vocab.text.test(text)) score += vocab.strong.test(text) ? 3 : 2;
     const textHit = score > 0;
-    if (CAREERS_PATH.test(path)) {
+    if (vocab.path.test(path)) {
       // un long titre d'article (« recrutement-de-cadres-a-nice-… ») n'est pas une page carrières
       const last = path.split("/").filter(Boolean).pop() ?? "";
       score += !textHit && (last.length > 28 || last.split("-").length > 4) ? 1 : 3;
@@ -326,7 +345,7 @@ function aboutLink(home: Page): string | null {
 }
 
 /** Une page obtenue par sondage d'un chemin usuel est-elle vraiment une page carrières ? */
-function looksLikeCareers(page: Page, home: Page): boolean {
+function looksLikeCareers(page: Page, home: Page, vocab: Vocab): boolean {
   if (page.status >= 400 || !page.html) return false;
   if (atsNameOfUrl(page.url)) return true;
   const u = new URL(page.url);
@@ -337,7 +356,7 @@ function looksLikeCareers(page: Page, home: Page): boolean {
   const title = norm(htmlToText(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(page.html)?.[1], 200) ?? "");
   if (/\b(404|not found|introuvable|page non trouvee|oops)\b/.test(title)) return false;
   const h1 = norm(htmlToText(/<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(page.html)?.[1], 200) ?? "");
-  return CAREERS_PATH.test(norm(u.pathname)) || CAREERS_TEXT.test(title) || CAREERS_TEXT.test(h1);
+  return vocab.path.test(norm(u.pathname)) || vocab.text.test(title) || vocab.text.test(h1);
 }
 
 // ── URL d'ATS présentes dans une page ─────────────────────────────────────────
@@ -584,8 +603,11 @@ async function fetchHome(domain: string, deadline: number): Promise<Page> {
 /**
  * Cherche la page carrières d'un site, les ATS qu'il référence et ses offres en
  * JSON-LD. Une quinzaine de requêtes au plus par domaine (2 à 8 en général).
+ * `agency` : le site est celui d'un cabinet de recrutement ; la page cherchée est
+ * alors celle des offres qu'il diffuse, pas celle de ses propres recrutements.
  */
-export async function detectCareers(domain: string): Promise<CareersResult> {
+export async function detectCareers(domain: string, { agency = false } = {}): Promise<CareersResult> {
+  const vocab = agency ? AGENCY : EMPLOYER;
   const result: CareersResult = { domain: cleanDomain(domain), careersUrl: null, atsUrls: [], postings: [], error: null, platform: null, jobLinks: [] };
   if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(result.domain)) return { ...result, error: "domaine invalide" };
   const deadline = Date.now() + DOMAIN_BUDGET;
@@ -605,7 +627,9 @@ export async function detectCareers(domain: string): Promise<CareersResult> {
 
     // 1. page carrières : meilleurs liens de l'accueil, sinon chemins usuels
     let careers: Page | null = null;
-    let candidates = careersCandidates(home);
+    let candidates = careersCandidates(home, vocab);
+    // cabinet sans page d'offres repérable : sa page carrières, comme pour un employeur
+    if (agency && !candidates.length) candidates = careersCandidates(home, EMPLOYER);
     if (!candidates.length) {
       const about = aboutLink(home);
       if (about) {
@@ -613,7 +637,7 @@ export async function detectCareers(domain: string): Promise<CareersResult> {
           const page = await fetchPage(about, deadline);
           if (page.status < 400 && page.html) {
             collectAtsUrls(page, ats);
-            candidates = careersCandidates(page).filter((u) => u !== page.url);
+            candidates = careersCandidates(page, vocab).filter((u) => u !== page.url);
           }
         } catch {
           /* page « à propos » illisible : on passe aux chemins usuels */
@@ -637,10 +661,10 @@ export async function detectCareers(domain: string): Promise<CareersResult> {
     if (!careers && !candidates.length) {
       const origin = new URL(home.url).origin;
       let blocked = 0;
-      for (const path of PROBE_PATHS.slice(0, MAX_PROBES)) {
+      for (const path of vocab.probes.slice(0, MAX_PROBES)) {
         try {
           const page = await fetchPage(origin + path, deadline);
-          if (looksLikeCareers(page, home)) {
+          if (looksLikeCareers(page, home, vocab)) {
             careers = page;
             break;
           }
@@ -684,7 +708,7 @@ export async function detectCareers(domain: string): Promise<CareersResult> {
       const hopUrl =
         indexLink(careers) ??
         (!ats.size && !direct && !jobLinks(careers).length
-          ? (careersCandidates(careers).find((u) => u !== careers!.url && u !== candidates[0]) ?? null)
+          ? (careersCandidates(careers, vocab).find((u) => u !== careers!.url && u !== candidates[0]) ?? null)
           : null);
       if (hopUrl && !(atsNameOfUrl(careers.url) && API_ATS.has(atsNameOfUrl(careers.url)!))) {
         try {

@@ -4,6 +4,7 @@
  *
  *   npx tsx scripts/test-careers.ts [N] [graine]      échantillon de N entreprises (60 par défaut)
  *   npx tsx scripts/test-careers.ts exemple.com …     domaines donnés, résultat détaillé
+ *   npx tsx scripts/test-careers.ts --cabinet exemple.com …   sites de cabinets de recrutement (page de leurs offres)
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,7 @@ const DB_PATH = path.resolve(here, "../../Enrichissement/data/enrichissement.db"
 const CONCURRENCY = 6;
 
 const args = process.argv.slice(2);
+const agency = args.includes("--cabinet");
 const explicit = args.filter((a) => /[a-z]\.[a-z]{2,}/i.test(a));
 const n = Number(args.find((a) => /^\d+$/.test(a))) || 60;
 const seed = Number(args.filter((a) => /^\d+$/.test(a))[1]) || 1;
@@ -54,7 +56,7 @@ await Promise.all(
     while (next < companies.length) {
       const c = companies[next++];
       const t0 = Date.now();
-      const r = await detectCareers(c.domain);
+      const r = await detectCareers(c.domain, { agency });
       const ms = Date.now() - t0;
       results.push({ c, r, ms });
 
