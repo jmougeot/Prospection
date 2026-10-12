@@ -1,6 +1,6 @@
 /**
  * Cherche la personne à contacter dans chaque entreprise cible : éditeurs et startups produit de 5 à 1000 personnes
- * (ou d'effectif inconnu) ayant des offres tech en ligne.
+ * (ou d'effectif inconnu) ayant des offres tech en ligne, et entreprises listées (`listed_companies`), visées sans offre.
  *  - employeur direct de 50 personnes au plus, ou d'effectif inconnu : un décideur tech (CTO, VP / Head of
  *    Engineering, fondateur) ;
  *  - employeur direct de plus de 50 personnes, où le CTO est trop haut placé : celui qui dirige le recrutement
@@ -25,6 +25,8 @@
  * les entreprises dont la dernière recherche n'a pas été triée (session interrompue).
  * `--natures=produit,autre` : natures d'entreprise visées (`produit` par défaut, voir classify-companies.ts).
  * `--effectif-max=199` : effectif maximal (1000 par défaut).
+ * `--effectif-min=1` : effectif minimal (5 par défaut).
+ * Une entreprise signalée disparue (`company_flags`) n'est jamais cherchée.
  */
 import { spawn } from "node:child_process";
 import os from "node:os";
@@ -58,6 +60,10 @@ const limit = Number(args.find((a) => /^\d+$/.test(a))) || 1000;
 const option = (name: string): string | undefined => args.find((a) => a.startsWith(`--${name}=`))?.split("=")[1];
 const types = (option("natures") ?? "produit").split(",").filter(Boolean);
 const maxSize = Number(option("effectif-max")) || 1000;
+const minSize = Number(option("effectif-min")) || 5;
+// Entreprises visées : celles qui ont des offres en ligne (une ligne par offre), et les entreprises listées.
+const TARGETS = `(SELECT company_key, company, COALESCE(posted_at, first_seen_at) AS seen_at FROM jobs WHERE closed_at IS NULL
+                  UNION ALL SELECT company_key, name, NULL FROM listed_companies)`;
 // Employeur direct de plus de 50 personnes : le CTO y est trop haut placé pour répondre. On y cherche celui qui dirige
 // le recrutement (contact principal) et le manager qui recrute pour son équipe technique (second contact).
 const HIRING = "s.headcount > 50 AND t.type NOT IN ('cabinet_recrutement', 'conseil_esn_agence')";
@@ -72,17 +78,18 @@ const pending = sortOnly
             WHERE k.reason = 'Ajouté à la main' OR (cs.hiring AND cs.fetched_at <= k.found_at))))`;
 const companies = db
   .prepare(
-    `SELECT j.company_key AS id, MAX(j.company) AS nom, s.headcount AS effectif, t.type AS nature, COUNT(*) AS offres,
+    `SELECT j.company_key AS id, MAX(j.company) AS nom, s.headcount AS effectif, t.type AS nature, COUNT(j.seen_at) AS offres,
             COALESCE((SELECT tries FROM contact_search WHERE company_key = j.company_key), 0) AS tries,
             COALESCE(${HIRING}, 0) AS recrutement
-     FROM jobs j LEFT JOIN company_sizes s USING (company_key) JOIN company_types t USING (company_key)
-     WHERE j.closed_at IS NULL AND t.type IN (${types.map(() => "?").join(", ")}) AND (s.headcount IS NULL OR s.headcount BETWEEN 5 AND ?)
+     FROM ${TARGETS} j LEFT JOIN company_sizes s USING (company_key) JOIN company_types t USING (company_key)
+     WHERE t.type IN (${types.map(() => "?").join(", ")}) AND (s.headcount IS NULL OR s.headcount BETWEEN ? AND ?)
+       AND j.company_key NOT IN (SELECT company_key FROM company_flags WHERE flag = 'disparue')
        AND ${pending}
      GROUP BY j.company_key
-     ORDER BY SUM(COALESCE(j.posted_at, j.first_seen_at) > (unixepoch() - 30 * 86400) * 1000) > 0 DESC, COUNT(*) DESC
+     ORDER BY SUM(j.seen_at > (unixepoch() - 30 * 86400) * 1000) > 0 DESC, COUNT(j.seen_at) DESC
      LIMIT ?`
   )
-  .all(...types, maxSize, limit) as Array<{ id: string; nom: string; effectif: number | null; nature: string; offres: number; tries: number; recrutement: number }>;
+  .all(...types, minSize, maxSize, limit) as Array<{ id: string; nom: string; effectif: number | null; nature: string; offres: number; tries: number; recrutement: number }>;
 console.log(`${companies.length} entreprise(s) ${sortOnly ? "à trier de nouveau" : retry ? "à relancer" : "sans contact, ou à recibler sur le recrutement"}`);
 type Company = (typeof companies)[number];
 
