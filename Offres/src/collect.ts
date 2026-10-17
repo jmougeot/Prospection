@@ -11,12 +11,18 @@
  *     fonds, Welcome to the Jungle, agrégateurs et recherche publique LinkedIn,
  *     dédoublonnés contre ce qui est déjà connu ;
  *  6. dates de publication et de modification des offres dont la source ne donne
- *     pas de date, cherchées sur la page de chaque offre (relue chaque semaine).
+ *     pas de date, cherchées sur la page de chaque offre (relue chaque semaine) ;
+ *  7. (optionnel) fiches des nouvelles entreprises, par les scripts de scripts/ :
+ *     effectif (WTTJ, Enrichissement, puis FullEnrich), nature, puis contact.
+ *     Chaque script ne traite que ce qui n'a pas encore été fait.
  *
  * Une offre déjà connue est mise à jour (last_seen_at) ; une offre absente d'une
  * page relue avec succès est marquée fermée (closed_at). Une page en erreur ne
  * ferme rien : une panne ne doit pas faire croire que les postes sont pourvus.
  */
+import { type ChildProcess, spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { db } from "./db.js";
 import { BoardNotFound, type Posting } from "./ats.js";
 import { type BoardAts, type BoardRef, isBoardAts, parseAnyBoardRef, readBoard } from "./boards.js";
@@ -34,7 +40,7 @@ import { fetchWttjJobs } from "./sources/wttj.js";
 
 export interface JobState {
   running: boolean;
-  phase: "discover" | "portfolio" | "sites" | "collect" | "feeds" | "dates" | null;
+  phase: "discover" | "portfolio" | "sites" | "collect" | "feeds" | "dates" | "fiches" | null;
   done: number; // pages carrières lues
   total: number; // pages carrières à lire
   new_boards: number; // pages découvertes pendant ce job
@@ -56,6 +62,7 @@ const state: JobState = {
   errors: [],
 };
 let stopRequested = false;
+let script: ChildProcess | null = null; // script de l'étape « fiches » en cours
 
 export function jobStatus(): JobState {
   return { ...state, errors: state.errors.slice(0, 20) };
@@ -64,6 +71,7 @@ export function jobStatus(): JobState {
 export function stopCollect(): boolean {
   if (!state.running) return false;
   stopRequested = true;
+  script?.kill();
   return true;
 }
 
@@ -76,6 +84,52 @@ async function pool<T>(items: T[], size: number, fn: (item: T) => Promise<void>)
     while (!stopRequested && next < items.length) await fn(items[next++]);
   };
   await Promise.all(Array.from({ length: size }, worker));
+}
+
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+/** Lance un script de scripts/ ; sa dernière ligne affichée devient `current`, ses erreurs celles du job. Ne lève jamais. */
+function runScript(label: string, file: string, args: string[] = []): Promise<void> {
+  return new Promise((resolve) => {
+    if (stopRequested) return resolve();
+    state.current = label;
+    const proc = spawn(path.join(ROOT, "node_modules", ".bin", "tsx"), [path.join("scripts", file), ...args], {
+      cwd: ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    script = proc;
+    const lines = (chunk: Buffer): string[] => String(chunk).split("\n").map((l) => l.trim()).filter(Boolean);
+    proc.stdout.on("data", (chunk: Buffer) => {
+      const last = lines(chunk).pop();
+      if (last) state.current = `${label} · ${last}`;
+    });
+    proc.stderr.on("data", (chunk: Buffer) => {
+      for (const l of lines(chunk)) state.errors.push(`${label} : ${l.slice(0, 200)}`);
+    });
+    const end = (): void => {
+      script = null;
+      resolve();
+    };
+    proc.on("error", (err) => {
+      state.errors.push(`${label} : ${errText(err)}`);
+      end();
+    });
+    proc.on("close", (code) => {
+      if (code && !stopRequested) state.errors.push(`${label} : arrêt (code ${code})`);
+      end();
+    });
+  });
+}
+
+// Natures d'entreprise dont on cherche le contact : employeurs directs, cabinets de recrutement, ESN et agences.
+const CONTACT_NATURES = "produit,cabinet_recrutement,conseil_esn_agence";
+
+/** Fiches des entreprises : effectif, nature, contact, pour au plus `limit` entreprises par étape payante. */
+async function completeCompanies(limit: number): Promise<void> {
+  await runScript("effectifs WTTJ et Enrichissement", "company-sizes.ts");
+  await runScript("effectifs FullEnrich", "company-fullenrich.ts", [String(limit)]);
+  await runScript("nature des entreprises", "classify-companies.ts");
+  await runScript("contacts", "find-contacts.ts", [String(limit), `--natures=${CONTACT_NATURES}`]);
 }
 
 // ─────────────────────────── Pages carrières suivies ───────────────────────────
@@ -548,9 +602,10 @@ export interface CollectOptions {
   extras: boolean; // job boards des fonds, Welcome to the Jungle, agrégateurs
   linkedin: boolean; // recherche publique LinkedIn
   sites: number; // nombre de sites d'entreprise à visiter (0 = aucun)
+  fiches: number; // entreprises à compléter (effectif, nature, contact) par étape payante (0 = aucune)
 }
 
-async function run({ discover, budget, extras, linkedin, sites }: CollectOptions): Promise<void> {
+async function run({ discover, budget, extras, linkedin, sites, fiches }: CollectOptions): Promise<void> {
   // les pages d'offre déjà connues d'abord : le tri par ancienneté juge sur des dates de modification à jour
   state.phase = "dates";
   await dateJobs();
@@ -631,6 +686,11 @@ async function run({ discover, budget, extras, linkedin, sites }: CollectOptions
   if (!stopRequested) {
     state.phase = "dates";
     await dateJobs();
+  }
+
+  if (fiches > 0 && !stopRequested) {
+    state.phase = "fiches";
+    await completeCompanies(fiches);
   }
 }
 

@@ -14,6 +14,9 @@ export const config = {
   // Sert uniquement à DÉCOUVRIR de nouvelles pages carrières (requêtes site:…).
   // Sans clé, la collecte fonctionne quand même sur les pages ajoutées à la main.
   serperApiKey: process.env.SERPER_API_KEY ?? "",
+  // Effectif et domaine des entreprises sans effectif connu (API Search de FullEnrich, payée au résultat).
+  // Sans clé, l'étape est sautée.
+  fullenrichApiKey: process.env.FULLENRICH_API_KEY ?? "",
   // Lecture des pages carrières « maison » par des sessions Claude Code sans interface
   // (abonnement de la machine, aucune clé d'API).
   claudeBin: process.env.CLAUDE_BIN ?? "claude",

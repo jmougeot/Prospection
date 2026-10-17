@@ -42,6 +42,15 @@
       <input id="fSitesLimit" type="number" value="150" min="1" max="3000" style="width:72px">
       <span class="muted" id="sitesHint">sites par collecte</span>
     </div>
+    <label class="check"
+      title="En fin de collecte, complète les entreprises qui ne l'ont pas encore été : effectif (WTTJ, Enrichissement, puis FullEnrich), nature (sessions Claude Code), puis contact (recherche web et sessions Claude Code) pour les employeurs directs, cabinets et ESN de 5 à 1000 personnes.">
+      <input type="checkbox" id="fFiches" checked> Effectif, nature et contact des entreprises
+    </label>
+    <div class="inline sub-opt" id="fichesWrap">
+      <span class="muted">jusqu'à</span>
+      <input id="fFichesLimit" type="number" value="150" min="1" max="1000" style="width:72px">
+      <span class="muted">entreprises par collecte</span>
+    </div>
 
     <details class="adv">
       <summary>Ajouter des pages carrières à la main</summary>
@@ -192,6 +201,7 @@ async function init() {
   $("#filters").addEventListener("input", () => { clearTimeout(filterTimer); filterTimer = setTimeout(loadCompanies, 250); });
   $("#fDiscover").addEventListener("change", (e) => ($("#budgetWrap").hidden = !e.target.checked));
   $("#fSites").addEventListener("change", (e) => ($("#sitesWrap").hidden = !e.target.checked));
+  $("#fFiches").addEventListener("change", (e) => ($("#fichesWrap").hidden = !e.target.checked));
   const meta = await loadMeta();
   // première utilisation : rien à relire, la découverte est le point de départ
   if (!meta.boards && meta.search_api) { $("#fDiscover").checked = true; $("#budgetWrap").hidden = false; }
@@ -207,7 +217,8 @@ async function collect() {
     await api("/api/collect", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ discover: $("#fDiscover").checked, budget: +$("#fBudget").value || 60, extras: $("#fExtras").checked, linkedin: $("#fLinkedin").checked,
-        sites: $("#fSites").checked, sites_limit: +$("#fSitesLimit").value || 150 }),
+        sites: $("#fSites").checked, sites_limit: +$("#fSitesLimit").value || 150,
+        fiches: $("#fFiches").checked, fiches_limit: +$("#fFichesLimit").value || 150 }),
     });
     trackJob();
   } catch (e) {
@@ -262,7 +273,7 @@ function trackJob() {
     if (!s) return;
     const pct = s.phase === "collect" && s.total ? Math.round((s.done / s.total) * 100) : 0;
     $("#jobBar").style.width = pct + "%";
-    const PHASES = { discover: "Découverte", portfolio: "Job boards des fonds", sites: "Sites des entreprises", feeds: "Autres sources", dates: "Dates de publication" };
+    const PHASES = { discover: "Découverte", portfolio: "Job boards des fonds", sites: "Sites des entreprises", feeds: "Autres sources", dates: "Dates de publication", fiches: "Fiches des entreprises" };
     $("#jobLabel").textContent = s.phase === "collect"
       ? `${s.done}/${s.total} page(s) lue(s) · ${s.open_jobs} offre(s) dont ${s.new_jobs} nouvelle(s)` + (s.current ? ` — ${s.current}` : "")
       : `${PHASES[s.phase] || "Collecte"} — ${s.new_boards} nouvelle(s) page(s) carrières` + (s.current ? ` · ${s.current}` : "");

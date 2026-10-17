@@ -308,7 +308,10 @@ export function registerRoutes(app: express.Express): void {
     const linkedin = b.linkedin === true;
     // sites d'entreprise visités pendant cette collecte (pages carrières lues par des sessions Claude Code)
     const sites = b.sites === true ? Math.min(Math.max(Math.round(Number(b.sites_limit)) || 150, 1), 3000) : 0;
-    if (!startCollect({ discover, budget, extras, linkedin, sites })) return res.status(409).json({ error: "Une collecte est déjà en cours" });
+    // fiches des entreprises (effectif, nature, contact) en fin de collecte : actives sauf demande contraire ;
+    // le plafond borne les étapes payantes (FullEnrich, recherches de contact)
+    const fiches = b.fiches !== false ? Math.min(Math.max(Math.round(Number(b.fiches_limit)) || 150, 1), 1000) : 0;
+    if (!startCollect({ discover, budget, extras, linkedin, sites, fiches })) return res.status(409).json({ error: "Une collecte est déjà en cours" });
     res.json({ ok: true });
   });
 
